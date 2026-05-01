@@ -32,7 +32,7 @@
 
 ### Phase 3：文档撰写
 
-读取 `~/.claude/skills/spec-dev/references/prd-template.md` 获取模板结构，按模板生成 PRD。
+读取 `references/prd-template.md` 获取模板结构，按模板生成 PRD。
 
 ## 需求质量标准（强制）
 

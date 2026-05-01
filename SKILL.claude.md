@@ -1,6 +1,11 @@
 ---
 name: spec-dev
-description: 需求开发全流程 Skill，兼容 Codex 和 Claude Code。接收需求后按 research、PRD、技术方案、文档确认、任务拆分、开发执行、开发确认、归档推进，适用于 Java 后端微服务和其他代码项目。Use when the user invokes $spec-dev, /spec-dev, spec-dev:, spec-dev：, 需求开发流程, 从需求到开发, 需求拆分开发, 开发流水线, or asks to complete a requirement through gated research, PRD, technical design, implementation, and archive workflow.
+description: 需求开发全流程 Skill。接收需求后自动执行 Deep Research → PRD → 技术方案 → 质量门禁确认 → 任务拆分 → 自动开发 → 质量门禁确认 → 归档。适用于 Java 后端微服务需求开发，兼容其他技术栈。当用户提到 spec-dev、需求开发流程、从需求到开发、需求拆分开发、开发流水线 时触发此 skill。
+when-to-use: 当用户输入 /spec-dev、spec-dev:、spec-dev：后跟需求描述时触发。也适用于用户要求走完整的需求调研→文档→开发→归档流程时。
+allowed-tools: Read, Edit, Write, Bash, Agent, WebFetch, WebSearch
+user-invocable: true
+version: 1.0.0
+argument-hint: 需求描述
 ---
 
 # Spec-Dev — 需求开发全流程 Skill
@@ -11,8 +16,7 @@ description: 需求开发全流程 Skill，兼容 Codex 和 Claude Code。接收
 
 ## 触发方式
 
-- `$spec-dev <需求描述>`（Codex 显式调用）
-- `/spec-dev <需求描述>`（Claude Code slash command 风格，也可作为普通触发文本）
+- `/spec-dev <需求描述>`
 - `spec-dev: <需求描述>`
 - `spec-dev：<需求描述>`
 - 无参数时：读取 `spec-dev/.state.json` 恢复上次流程
@@ -52,7 +56,6 @@ spec-dev/
 
 ## Skill 资源读取约定
 
-- 本 skill 同时支持安装到 `~/.codex/skills/spec-dev` 和 `~/.claude/skills/spec-dev`
 - 本 skill 的资源路径均以 `SKILL.md` 所在目录为基准解析，避免绑定某个运行时的绝对目录
 - 读取专家指令时使用 `agents/*.md`
 - 读取模板时使用 `references/*.md`

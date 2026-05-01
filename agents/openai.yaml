@@ -1,0 +1,7 @@
+interface:
+  display_name: "Spec-Dev"
+  short_description: "需求调研、PRD、技术方案、门禁确认、任务开发与归档流水线"
+  default_prompt: "Use $spec-dev to turn a software requirement into PRD, technical design, implementation tasks, code changes, and archive notes."
+
+policy:
+  allow_implicit_invocation: true

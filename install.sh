@@ -1,23 +1,58 @@
 #!/bin/bash
 # spec-dev-skill 安装脚本
-# 将 skill 安装到 ~/.claude/skills/spec-dev/
+# 用法: bash install.sh [codex|claude|both]
 
-set -e
+set -euo pipefail
 
-SKILL_DIR="$HOME/.claude/skills/spec-dev"
-
-if [ -d "$SKILL_DIR" ]; then
-  echo "已存在 $SKILL_DIR，将备份为 ${SKILL_DIR}.bak"
-  mv "$SKILL_DIR" "${SKILL_DIR}.bak"
-fi
-
+RUNTIME="${1:-codex}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-mkdir -p "$SKILL_DIR"
-cp -r "$SCRIPT_DIR/SKILL.md" "$SKILL_DIR/"
-cp -r "$SCRIPT_DIR/agents" "$SKILL_DIR/"
-cp -r "$SCRIPT_DIR/references" "$SKILL_DIR/"
-cp -r "$SCRIPT_DIR/scripts" "$SKILL_DIR/"
+copy_skill() {
+  local skill_dir="$1"
+  local label="$2"
+  local skill_file="$3"
 
-echo "安装完成: $SKILL_DIR"
-echo "在 Claude Code 中输入 /spec-dev <需求描述> 即可使用"
+  if [ -d "$skill_dir" ]; then
+    local backup_dir="${skill_dir}.bak.$(date +%Y%m%d%H%M%S)"
+    echo "已存在 $skill_dir，将备份为 $backup_dir"
+    mv "$skill_dir" "$backup_dir"
+  fi
+
+  mkdir -p "$(dirname "$skill_dir")"
+  mkdir -p "$skill_dir"
+  cp "$skill_file" "$skill_dir/SKILL.md"
+  cp -r "$SCRIPT_DIR/agents" "$skill_dir/"
+  cp -r "$SCRIPT_DIR/references" "$skill_dir/"
+  cp -r "$SCRIPT_DIR/scripts" "$skill_dir/"
+
+  echo "$label 安装完成: $skill_dir"
+}
+
+if [ -n "${CODEX_HOME:-}" ]; then
+  CODEX_ROOT="$CODEX_HOME"
+else
+  CODEX_ROOT="$HOME/.codex"
+fi
+
+CLAUDE_ROOT="${CLAUDE_HOME:-$HOME/.claude}"
+
+case "$RUNTIME" in
+  codex)
+    copy_skill "$CODEX_ROOT/skills/spec-dev" "Codex" "$SCRIPT_DIR/SKILL.md"
+    echo '在 Codex 中输入: $spec-dev <需求描述>'
+    ;;
+  claude)
+    copy_skill "$CLAUDE_ROOT/skills/spec-dev" "Claude Code" "$SCRIPT_DIR/SKILL.claude.md"
+    echo "在 Claude Code 中输入: /spec-dev <需求描述>"
+    ;;
+  both)
+    copy_skill "$CODEX_ROOT/skills/spec-dev" "Codex" "$SCRIPT_DIR/SKILL.md"
+    copy_skill "$CLAUDE_ROOT/skills/spec-dev" "Claude Code" "$SCRIPT_DIR/SKILL.claude.md"
+    echo '在 Codex 中输入: $spec-dev <需求描述>'
+    echo "在 Claude Code 中输入: /spec-dev <需求描述>"
+    ;;
+  *)
+    echo "用法: bash install.sh [codex|claude|both]" >&2
+    exit 1
+    ;;
+esac

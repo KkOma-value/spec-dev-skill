@@ -63,7 +63,7 @@ sequenceDiagram
 
 ## 执行规则
 
-1. 读取 `~/.claude/skills/spec-dev/references/tech-template.md` 获取模板结构
+1. 读取 `references/tech-template.md` 获取模板结构
 2. 技术方案必须与 PRD 中的功能点一一对应，不遗漏
 3. 接口设计必须写明完整的入参、出参、异常码，不允许「参考现有接口」等模糊描述
 4. 数据库变更必须写明具体的 DDL 语句（ALTER TABLE / CREATE TABLE）
