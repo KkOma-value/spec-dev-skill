@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh *)",
+      "Bash(git remote *)",
+      "Bash(git add *)",
+      "Bash(git commit -m 'Merge skill files and rewrite README *)",
+      "Bash(git push *)",
+      "Bash(awk '{print $2}')",
+      "Bash(python3 *)",
+      "Bash(python *)",
+      "Bash(mkdir -p ~/.claude/projects)",
+      "Bash(cp /tmp/transcripts.txt ~/.claude/projects/transcripts.txt)",
+      "Bash(xargs head *)",
+      "Bash(xargs grep *)",
+      "Skill(update-config)"
+    ]
+  }
+}
