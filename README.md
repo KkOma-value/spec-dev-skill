@@ -30,12 +30,20 @@
 
 **spec-dev** is a requirement-to-delivery skill for Codex and Claude Code. It ships a thin `SKILL.md` plus a zero-dependency Node.js executor, so the AI only loads the current phase instructions instead of carrying the entire workflow in context every turn.
 
-## Pipeline
+## Workflow
 
-```text
-research ──► prd ──► tech ──► docs_confirm ──► spec ──► dev ──► dev_confirm ──► archive ──► done
-                                    │                              │
-                              [user gate]                    [user gate]
+```mermaid
+flowchart LR
+  A[research] --> B[prd]
+  B --> C[tech]
+  C --> D{{docs_confirm}}
+  D -->|confirm| E[spec]
+  D -->|modify| C
+  E --> F[dev]
+  F --> G{{dev_confirm}}
+  G -->|confirm| H[archive]
+  G -->|modify| F
+  H --> I[done]
 ```
 
 Two hard gates cannot be skipped:
