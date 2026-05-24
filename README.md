@@ -112,6 +112,8 @@ node scripts/spec-dev.mjs validate --root <projectRoot>
 
 All commands print JSON to stdout. Errors also print JSON and return a non-zero exit code.
 
+`--artifact` is required when completing `prd`, `tech`, or `spec`. The `archive` phase must be completed with the dedicated `archive` command so the archive file is actually generated.
+
 ### Typical Session
 
 ```bash
@@ -163,7 +165,8 @@ spec-dev-skill/
 │   ├── spec-template.md
 │   └── archive-template.md
 ├── scripts/
-│   └── spec-dev.mjs          # State machine, lazy-load hints, validation, archive
+│   ├── spec-dev.mjs          # State machine, lazy-load hints, validation, archive
+│   └── archive.sh            # Deprecated compatibility wrapper
 └── test/
     └── spec-dev.test.mjs     # Covers init, phases, gates, archive, validation
 ```

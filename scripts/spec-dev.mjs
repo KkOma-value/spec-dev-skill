@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const SCHEMA_VERSION = 1;
 const STATE_DIR = 'spec-dev';
 const STATE_FILE = '.state.json';
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const SKILL_ROOT = path.resolve(SCRIPT_DIR, '..');
 
 const PHASES = [
   'research',
@@ -135,6 +138,17 @@ function artifactOrDefault(state, kind) {
   return state.artifacts?.[kind] || artifactPath(kind, state.requirement_name);
 }
 
+function requiredArtifact(state, kind) {
+  const artifact = state.artifacts?.[kind];
+  if (!artifact) {
+    throw appError('ARTIFACT_REQUIRED', `Artifact ${kind} must be recorded before phase ${state.phase}.`, {
+      phase: state.phase,
+      kind,
+    });
+  }
+  return artifact;
+}
+
 function phasePayload(state) {
   const phase = state.phase;
   const currentGate = state.current_gate || (phase === 'docs_confirm' || phase === 'dev_confirm' ? phase : null);
@@ -158,25 +172,25 @@ function phasePayload(state) {
       message = '读取技术方案专家指令和模板，生成 Tech 后调用 advance --completed tech 并进入 docs_confirm 门禁。';
       break;
     case 'docs_confirm':
-      requiredReads = [artifactOrDefault(state, 'prd'), artifactOrDefault(state, 'tech')];
+      requiredReads = [requiredArtifact(state, 'prd'), requiredArtifact(state, 'tech')];
       message = '硬门禁：向用户展示 PRD 和 Tech 摘要；确认后调用 gate --confirm docs_confirm，修改意见则更新文档并停留门禁。';
       break;
     case 'spec':
       requiredReads = [
         'agents/spec-generator.md',
         'references/spec-template.md',
-        artifactOrDefault(state, 'prd'),
-        artifactOrDefault(state, 'tech'),
+        requiredArtifact(state, 'prd'),
+        requiredArtifact(state, 'tech'),
       ];
       expectedOutput = artifactPath('spec', state.requirement_name);
       message = '读取任务拆分专家指令、模板和已确认文档，生成 tasks 后调用 advance --completed spec 并记录 artifact。';
       break;
     case 'dev':
-      requiredReads = [artifactOrDefault(state, 'spec')];
+      requiredReads = [requiredArtifact(state, 'spec')];
       message = '按任务清单顺序实现每个 [] 任务，完成后标记 [x] 并运行构建验证；全部完成后调用 advance --completed dev。';
       break;
     case 'dev_confirm':
-      requiredReads = [artifactOrDefault(state, 'spec')];
+      requiredReads = [requiredArtifact(state, 'spec')];
       message = '硬门禁：汇报完成任务、变更文件和构建结果；确认后调用 gate --confirm dev_confirm，修改意见则继续 dev。';
       break;
     case 'archive':
@@ -345,8 +359,20 @@ async function commandAdvance(options) {
       completed,
     });
   }
+  if (completed === 'archive') {
+    throw appError('ARCHIVE_REQUIRES_COMMAND', 'Use the archive command to generate the archive artifact.');
+  }
 
-  for (const [kind, artifact] of Object.entries(parseArtifacts(options.artifact))) {
+  const artifacts = parseArtifacts(options.artifact);
+  const requiredKind = artifactKindForCompletedPhase(completed);
+  if (requiredKind && !artifacts[requiredKind]) {
+    throw appError('ARTIFACT_REQUIRED', `Completing ${completed} requires --artifact ${requiredKind}=<path>.`, {
+      phase: completed,
+      kind: requiredKind,
+    });
+  }
+
+  for (const [kind, artifact] of Object.entries(artifacts)) {
     state.artifacts[kind] = artifact;
   }
 
@@ -359,6 +385,13 @@ async function commandAdvance(options) {
   state.current_gate = state.phase === 'docs_confirm' || state.phase === 'dev_confirm' ? state.phase : null;
   await writeState(root, state);
   return phasePayload(state);
+}
+
+function artifactKindForCompletedPhase(phase) {
+  if (phase === 'prd' || phase === 'tech' || phase === 'spec') {
+    return phase;
+  }
+  return null;
 }
 
 async function commandGate(options) {
@@ -394,46 +427,25 @@ async function commandArchive(options) {
     });
   }
 
-  const date = process.env.SPEC_DEV_DATE || new Date().toISOString().slice(0, 10);
+  const date = resolveArchiveDate(process.env.SPEC_DEV_DATE);
+  const prdPath = requiredArtifact(state, 'prd');
+  const techPath = requiredArtifact(state, 'tech');
+  const specPath = requiredArtifact(state, 'spec');
+  await assertArtifactsExist(root, [prdPath, techPath, specPath]);
+
   const archivePath = `spec-dev/archive/${date}-${state.requirement_name}.md`;
   const archiveFile = path.join(root, archivePath);
   await mkdir(path.dirname(archiveFile), { recursive: true });
 
-  const prdPath = artifactOrDefault(state, 'prd');
-  const techPath = artifactOrDefault(state, 'tech');
-  const specPath = artifactOrDefault(state, 'spec');
   const taskCounts = await countTasks(path.join(root, specPath));
-  const body = [
-    `# ${state.requirement_name} — 开发归档`,
-    '',
-    '## 基本信息',
-    '',
-    '| 字段 | 值 |',
-    '|------|-----|',
-    `| 需求名称 | ${state.requirement_name} |`,
-    `| 原始需求 | ${state.requirement} |`,
-    `| 归档日期 | ${date} |`,
-    `| 项目目录 | ${root} |`,
-    '',
-    '## PRD 文档',
-    '',
-    `文件: ${prdPath}`,
-    '',
-    '## 技术方案',
-    '',
-    `文件: ${techPath}`,
-    '',
-    '## 任务清单',
-    '',
-    `文件: ${specPath}`,
-    '',
-    `任务完成: ${taskCounts.done}/${taskCounts.total}`,
-    '',
-    '## 关键决策记录',
-    '',
-    '- 以 PRD、技术方案和任务清单为准；详细内容见对应产物文件。',
-    '',
-  ].join('\n');
+  const body = await renderArchiveTemplate(root, state, {
+    archivePath,
+    date,
+    prdPath,
+    techPath,
+    specPath,
+    taskCounts,
+  });
 
   await writeFile(archiveFile, body, 'utf8');
   state.artifacts.archive = archivePath;
@@ -448,35 +460,17 @@ async function commandArchive(options) {
   };
 }
 
-async function countTasks(specFile) {
-  let raw = '';
-  try {
-    raw = await readFile(specFile, 'utf8');
-  } catch (error) {
-    if (error.code !== 'ENOENT') {
-      throw error;
-    }
+function resolveArchiveDate(overrideDate) {
+  const date = overrideDate || new Date().toISOString().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw appError('INVALID_ARCHIVE_DATE', 'Archive date must use YYYY-MM-DD format.', { date });
   }
-
-  const lines = raw.split(/\r?\n/);
-  return {
-    total: lines.filter((line) => /^\[/.test(line)).length,
-    done: lines.filter((line) => /^\[x\]/i.test(line)).length,
-  };
+  return date;
 }
 
-async function commandValidate(options) {
-  const root = normalizeRoot(options);
-  const state = await readState(root);
-  if (!PHASES.includes(state.phase)) {
-    throw appError('UNKNOWN_PHASE', `Unknown phase: ${state.phase}`, { phase: state.phase });
-  }
-  if (state.phase === 'done') {
-    return { valid: true, phase: state.phase, current_gate: state.current_gate || null };
-  }
-
+async function assertArtifactsExist(root, artifacts) {
   const missing = [];
-  for (const artifact of artifactsRequiredForPhase(state)) {
+  for (const artifact of artifacts) {
     try {
       await access(path.join(root, artifact));
     } catch (error) {
@@ -491,6 +485,66 @@ async function commandValidate(options) {
   if (missing.length > 0) {
     throw appError('ARTIFACT_NOT_FOUND', 'One or more required artifacts are missing.', { missing });
   }
+}
+
+async function renderArchiveTemplate(root, state, archive) {
+  const templatePath = path.join(SKILL_ROOT, 'references', 'archive-template.md');
+  const template = await readFile(templatePath, 'utf8');
+  const startedAt = String(state.created_at || '').slice(0, 10) || archive.date;
+  return template
+    .replaceAll('{需求名称}', state.requirement_name)
+    .replaceAll('{YYYY-MM-DD}', archive.date)
+    .replaceAll('{项目名称}', path.basename(root))
+    .replaceAll('{开始日期}', startedAt)
+    .replaceAll('{归档日期}', archive.date)
+    .replaceAll('{从 PRD 中提取 3-5 条核心功能点}', `详见 ${archive.prdPath}`)
+    .replaceAll('{从技术方案中提取核心设计决策}', `详见 ${archive.techPath}`)
+    .replaceAll(
+      '| {文件路径} | 新增/修改/删除 | {简要说明} |',
+      [
+        `| ${archive.prdPath} | 新增/修改 | PRD 产物 |`,
+        `| ${archive.techPath} | 新增/修改 | 技术方案产物 |`,
+        `| ${archive.specPath} | 新增/修改 | 任务清单产物，任务完成: ${archive.taskCounts.done}/${archive.taskCounts.total} |`,
+        `| ${archive.archivePath} | 新增 | 本归档文件 |`,
+      ].join('\n'),
+    )
+    .replaceAll('{记录开发过程中的重要技术决策和取舍}', '- 以 PRD、技术方案和任务清单为准；详细内容见对应产物文件。')
+    .replaceAll(`spec-dev/prd/{requirement_name}-prd.md`, archive.prdPath)
+    .replaceAll(`spec-dev/tech/{requirement_name}-tech.md`, archive.techPath)
+    .replaceAll(`spec-dev/spec/{requirement_name}-tasks.md`, archive.specPath)
+    .concat(`\n## 任务完成情况\n\n任务完成: ${archive.taskCounts.done}/${archive.taskCounts.total}\n`);
+}
+
+async function countTasks(specFile) {
+  let raw = '';
+  try {
+    raw = await readFile(specFile, 'utf8');
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      throw error;
+    }
+  }
+
+  const taskLine = /^\[(?:x| )?\]\s+\d+\./i;
+  const doneLine = /^\[x\]\s+\d+\./i;
+  const lines = raw.split(/\r?\n/);
+  return {
+    total: lines.filter((line) => taskLine.test(line)).length,
+    done: lines.filter((line) => doneLine.test(line)).length,
+  };
+}
+
+async function commandValidate(options) {
+  const root = normalizeRoot(options);
+  const state = await readState(root);
+  if (!PHASES.includes(state.phase)) {
+    throw appError('UNKNOWN_PHASE', `Unknown phase: ${state.phase}`, { phase: state.phase });
+  }
+  if (state.phase === 'done') {
+    return { valid: true, phase: state.phase, current_gate: state.current_gate || null };
+  }
+
+  await assertArtifactsExist(root, artifactsRequiredForPhase(state));
 
   return { valid: true, phase: state.phase, current_gate: state.current_gate || null };
 }
@@ -499,12 +553,12 @@ function artifactsRequiredForPhase(state) {
   switch (state.phase) {
     case 'docs_confirm':
     case 'spec':
-      return [artifactOrDefault(state, 'prd'), artifactOrDefault(state, 'tech')];
+      return [requiredArtifact(state, 'prd'), requiredArtifact(state, 'tech')];
     case 'dev':
     case 'dev_confirm':
-      return [artifactOrDefault(state, 'spec')];
+      return [requiredArtifact(state, 'spec')];
     case 'archive':
-      return [artifactOrDefault(state, 'prd'), artifactOrDefault(state, 'tech'), artifactOrDefault(state, 'spec')];
+      return [requiredArtifact(state, 'prd'), requiredArtifact(state, 'tech'), requiredArtifact(state, 'spec')];
     default:
       return [];
   }

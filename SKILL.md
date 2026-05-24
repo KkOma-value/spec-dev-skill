@@ -83,15 +83,54 @@ node scripts/spec-dev.mjs validate --root <projectRoot>
 ## 阶段推进规则
 
 - `research` 完成：`advance --completed research`
-- `prd` 完成：`advance --completed prd --artifact prd=<path>`
-- `tech` 完成：`advance --completed tech --artifact tech=<path>`，进入 `docs_confirm`
+- `prd` 完成：必须调用 `advance --completed prd --artifact prd=<path>`
+- `tech` 完成：必须调用 `advance --completed tech --artifact tech=<path>`，进入 `docs_confirm`
 - 用户确认 `docs_confirm`：`gate --confirm docs_confirm`
-- `spec` 完成：`advance --completed spec --artifact spec=<path>`
+- `spec` 完成：必须调用 `advance --completed spec --artifact spec=<path>`
 - `dev` 完成：`advance --completed dev`，进入 `dev_confirm`
 - 用户确认 `dev_confirm`：`gate --confirm dev_confirm`
 - `archive` 阶段：`archive`
 
+不要用 `advance --completed archive` 跳过归档；归档只能由 `archive` 命令生成文件并推进到 `done`。
+
 用户在门禁阶段提出修改意见时，更新对应产物后停留在当前门禁，不调用 `gate`。只有用户明确确认后才推进。
+
+## 门禁响应规则
+
+`docs_confirm` 必须展示：
+
+1. PRD 核心要点摘要 3-5 条。
+2. Tech 方案核心要点摘要 3-5 条。
+3. 明确提示：「请确认 PRD 和技术方案，确认后将进入任务拆分阶段。你可以说"确认"继续，或提出修改意见。」
+
+`dev_confirm` 必须展示：
+
+1. 已完成任务数量和列表。
+2. 修改的文件清单。
+3. 构建/编译结果。
+4. 明确提示：「开发已完成，请确认。确认后将进行归档。你可以说"确认"继续，或指出需要修改的地方。」
+
+用户响应分类：
+
+- 确认类：`确认`、`通过`、`OK`、`ok`、`没问题`、`继续` → 调用对应 `gate --confirm ...`。
+- 修改类：`修改`、`补充`、`改一下`、`继续改` 加具体内容 → 修改对应产物，留在当前门禁，再次展示摘要等待确认。
+- 取消类：`取消`、`退出`、`不做了` → 停止流程但保留已有产物。
+
+## dev 阶段执行规则
+
+- 读取 `spec-dev/spec/<name>-tasks.md`，只执行 `[]` 状态任务。
+- 按任务顺序执行，不跳过、不自由发挥，严格遵循任务中的文件、修改指令和验收标准。
+- 每完成一个任务，将 `[]` 改为 `[x]`，并在任务末尾追加 `- 完成时间: YYYY-MM-DD HH:mm`。
+- 每个任务完成后立即运行项目构建/编译验证；Java 项目默认 `mvn compile`，其他项目使用对应构建命令。
+- 编译失败时先修复，修复并重新验证通过后才能标记任务完成。
+- 全部任务完成后再调用 `advance --completed dev`。
+
+## 错误恢复
+
+- 执行器返回 `ARTIFACT_REQUIRED` 时，不要猜默认路径；回到刚完成的阶段记录真实 artifact 路径，或修正 `.state.json`。
+- 执行器返回 `ARTIFACT_NOT_FOUND` 时，先检查产物是否被删除、路径是否写错，再继续流程。
+- 状态文件损坏时，根据已有 `spec-dev/prd`、`spec-dev/tech`、`spec-dev/spec`、`spec-dev/archive` 产物推断当前阶段并重建 state。
+- 联网调研失败时降级为纯本地分析并告知用户；不要阻塞 PRD/Tech 生成。
 
 ## 首轮响应契约
 
