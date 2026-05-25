@@ -94,14 +94,22 @@ The executor reads `spec-dev/.state.json` and returns:
   "phase": "prd",
   "current_gate": null,
   "required_reads": ["agents/prd-writer.md", "references/prd-template.md"],
+  "required_read_files": [
+    "/absolute/skill-root/agents/prd-writer.md",
+    "/absolute/skill-root/references/prd-template.md"
+  ],
   "expected_output": "spec-dev/prd/add-status-query-api-prd.md",
-  "message": "Read PRD agent instructions and template, generate PRD, then advance."
+  "expected_output_file": "/absolute/project-root/spec-dev/prd/add-status-query-api-prd.md",
+  "project_root": "/absolute/project-root",
+  "message": "Read PRD agent instructions and template, write PRD to expected_output_file, then advance."
 }
 ```
 
-The AI reads only the files listed in `required_reads`:
+The AI reads only the files listed in `required_read_files` when present. `required_reads` remains as a portable compatibility field:
 - `agents/*` and `references/*` resolve relative to the skill directory.
 - `spec-dev/*` files resolve relative to the target project root.
+
+Generated documents must be written to `expected_output_file`, the absolute path under `project_root`. State remains portable: when advancing `prd`, `tech`, or `spec`, pass the project-relative `expected_output` as the artifact value.
 
 Context stays small — only the files relevant to the current phase are loaded.
 
@@ -118,9 +126,9 @@ node scripts/spec-dev.mjs archive --root <projectRoot>
 node scripts/spec-dev.mjs validate --root <projectRoot>
 ```
 
-All commands print JSON to stdout. Errors also print JSON and return a non-zero exit code.
+All commands print JSON to stdout. Errors also print JSON and return a non-zero exit code. `--root` is the source of truth for project output: use the explicit target project path when one is provided, otherwise use the current project workspace root.
 
-`--artifact` is required when completing `prd`, `tech`, or `spec`. The `archive` phase has its own dedicated `archive` command to ensure the archive file is generated.
+`--artifact` is required when completing `prd`, `tech`, or `spec`. It may be relative or absolute, but it must resolve inside `--root`; the executor stores it as a project-relative POSIX path in `.state.json`. The `archive` phase has its own dedicated `archive` command to ensure the archive file is generated.
 
 ### Typical Session
 
@@ -154,7 +162,7 @@ spec-dev/
     └── <date>-<name>.md
 ```
 
-`.state.json` includes `schema_version: 1`, current phase, original requirement, generated slug name, completed phases, gate state, and artifact paths.
+`.state.json` includes `schema_version: 1`, current phase, original requirement, generated slug name, completed phases, gate state, and project-relative artifact paths.
 
 ## Repository Structure
 

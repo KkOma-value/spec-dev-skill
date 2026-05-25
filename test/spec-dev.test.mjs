@@ -175,6 +175,56 @@ test('next returns minimal reads and expected output for each phase', async () =
   }
 });
 
+test('next returns absolute output file under project root independent of command cwd', async () => {
+  await withTempProject(async (root) => {
+    await writeState(root, baseState({ phase: 'prd', phases_completed: ['research'] }));
+
+    const result = runCli(['next', '--root', root], { cwd: tmpdir() });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.json.project_root, path.resolve(root));
+    assert.equal(result.json.expected_output, 'spec-dev/prd/add-status-query-api-prd.md');
+    assert.equal(
+      result.json.expected_output_file,
+      path.join(root, 'spec-dev', 'prd', 'add-status-query-api-prd.md'),
+    );
+  });
+});
+
+test('next returns absolute read files aligned with required reads', async () => {
+  await withTempProject(async (root) => {
+    await writeState(
+      root,
+      baseState({
+        phase: 'spec',
+        phases_completed: ['research', 'prd', 'tech', 'docs_confirm'],
+        artifacts: {
+          prd: 'spec-dev/prd/add-status-query-api-prd.md',
+          tech: 'spec-dev/tech/add-status-query-api-tech.md',
+          spec: null,
+          archive: null,
+        },
+      }),
+    );
+
+    const result = runCli(['next', '--root', root]);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(result.json.required_reads, [
+      'agents/spec-generator.md',
+      'references/spec-template.md',
+      'spec-dev/prd/add-status-query-api-prd.md',
+      'spec-dev/tech/add-status-query-api-tech.md',
+    ]);
+    assert.deepEqual(result.json.required_read_files, [
+      path.join(repoRoot, 'agents', 'spec-generator.md'),
+      path.join(repoRoot, 'references', 'spec-template.md'),
+      path.join(root, 'spec-dev', 'prd', 'add-status-query-api-prd.md'),
+      path.join(root, 'spec-dev', 'tech', 'add-status-query-api-tech.md'),
+    ]);
+  });
+});
+
 test('advance enforces phase order and records artifacts', async () => {
   await withTempProject(async (root) => {
     await writeState(root, baseState({ phase: 'prd', phases_completed: ['research'] }));
@@ -199,6 +249,34 @@ test('advance enforces phase order and records artifacts', async () => {
     const state = await readState(root);
     assert.deepEqual(state.phases_completed, ['research', 'prd']);
     assert.equal(state.artifacts.prd, 'spec-dev/prd/add-status-query-api-prd.md');
+  });
+});
+
+test('advance stores absolute artifact paths as project-relative posix paths', async () => {
+  await withTempProject(async (root) => {
+    await writeState(root, baseState({ phase: 'prd', phases_completed: ['research'] }));
+    const absolutePrd = path.join(root, 'spec-dev', 'prd', 'add-status-query-api-prd.md');
+
+    const result = runCli(['advance', '--root', root, '--completed', 'prd', '--artifact', `prd=${absolutePrd}`]);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.json.artifacts.prd, 'spec-dev/prd/add-status-query-api-prd.md');
+
+    const state = await readState(root);
+    assert.equal(state.artifacts.prd, 'spec-dev/prd/add-status-query-api-prd.md');
+  });
+});
+
+test('advance rejects artifact paths outside project root', async () => {
+  await withTempProject(async (root) => {
+    await writeState(root, baseState({ phase: 'prd', phases_completed: ['research'] }));
+    const outsidePath = path.join(tmpdir(), `spec-dev-outside-${Date.now()}.md`);
+
+    const result = runCli(['advance', '--root', root, '--completed', 'prd', '--artifact', `prd=${outsidePath}`]);
+
+    assert.notEqual(result.status, 0);
+    assert.equal(result.json.error.code, 'ARTIFACT_OUTSIDE_ROOT');
+    assert.equal(result.json.error.kind, 'prd');
   });
 });
 

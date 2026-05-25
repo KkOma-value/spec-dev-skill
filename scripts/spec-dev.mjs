@@ -119,6 +119,14 @@ function normalizeRoot(options) {
   return path.resolve(String(options.root || process.cwd()));
 }
 
+function toPosixPath(filePath) {
+  return filePath.split(path.sep).join('/');
+}
+
+function pathParts(posixPath) {
+  return posixPath.split('/').filter(Boolean);
+}
+
 function artifactPath(kind, requirementName) {
   switch (kind) {
     case 'prd':
@@ -149,7 +157,46 @@ function requiredArtifact(state, kind) {
   return artifact;
 }
 
-function phasePayload(state) {
+function resolveReadFile(root, readPath) {
+  if (path.isAbsolute(readPath)) {
+    return path.normalize(readPath);
+  }
+  if (readPath.startsWith('agents/') || readPath.startsWith('references/')) {
+    return path.join(SKILL_ROOT, ...pathParts(readPath));
+  }
+  return path.join(root, ...pathParts(readPath));
+}
+
+function resolveProjectFile(root, projectPath) {
+  if (path.isAbsolute(projectPath)) {
+    return path.normalize(projectPath);
+  }
+  return path.join(root, ...pathParts(projectPath));
+}
+
+function normalizeArtifactForState(root, kind, artifact) {
+  const rawArtifact = String(artifact);
+  const absoluteArtifact = path.isAbsolute(rawArtifact)
+    ? path.resolve(rawArtifact)
+    : path.resolve(root, rawArtifact);
+  const relativeArtifact = path.relative(root, absoluteArtifact);
+
+  if (
+    relativeArtifact === '' ||
+    relativeArtifact.startsWith('..') ||
+    path.isAbsolute(relativeArtifact)
+  ) {
+    throw appError('ARTIFACT_OUTSIDE_ROOT', `Artifact ${kind} must be inside project root.`, {
+      kind,
+      artifact: rawArtifact,
+      project_root: root,
+    });
+  }
+
+  return toPosixPath(relativeArtifact);
+}
+
+function phasePayload(state, root) {
   const phase = state.phase;
   const currentGate = state.current_gate || (phase === 'docs_confirm' || phase === 'dev_confirm' ? phase : null);
   let requiredReads = [];
@@ -164,12 +211,12 @@ function phasePayload(state) {
     case 'prd':
       requiredReads = ['agents/prd-writer.md', 'references/prd-template.md'];
       expectedOutput = artifactPath('prd', state.requirement_name);
-      message = '读取 PRD 专家指令和模板，生成 PRD 后调用 advance --completed prd 并记录 artifact。';
+      message = '读取 PRD 专家指令和模板，将 PRD 写入 expected_output_file；完成后调用 advance --completed prd --artifact prd=<expected_output>。';
       break;
     case 'tech':
       requiredReads = ['agents/tech-writer.md', 'references/tech-template.md'];
       expectedOutput = artifactPath('tech', state.requirement_name);
-      message = '读取技术方案专家指令和模板，生成 Tech 后调用 advance --completed tech 并进入 docs_confirm 门禁。';
+      message = '读取技术方案专家指令和模板，将 Tech 写入 expected_output_file；完成后调用 advance --completed tech --artifact tech=<expected_output> 并进入 docs_confirm 门禁。';
       break;
     case 'docs_confirm':
       requiredReads = [requiredArtifact(state, 'prd'), requiredArtifact(state, 'tech')];
@@ -183,7 +230,7 @@ function phasePayload(state) {
         requiredArtifact(state, 'tech'),
       ];
       expectedOutput = artifactPath('spec', state.requirement_name);
-      message = '读取任务拆分专家指令、模板和已确认文档，生成 tasks 后调用 advance --completed spec 并记录 artifact。';
+      message = '读取任务拆分专家指令、模板和已确认文档，将 tasks 写入 expected_output_file；完成后调用 advance --completed spec --artifact spec=<expected_output>。';
       break;
     case 'dev':
       requiredReads = [requiredArtifact(state, 'spec')];
@@ -210,7 +257,10 @@ function phasePayload(state) {
     phase,
     current_gate: currentGate,
     required_reads: requiredReads,
+    required_read_files: requiredReads.map((readPath) => resolveReadFile(root, readPath)),
     expected_output: expectedOutput,
+    expected_output_file: expectedOutput ? resolveProjectFile(root, expectedOutput) : null,
+    project_root: root,
     requirement: state.requirement,
     requirement_name: state.requirement_name,
     artifacts: state.artifacts,
@@ -297,7 +347,7 @@ function createState(requirement) {
   };
 }
 
-function parseArtifacts(value) {
+function parseArtifacts(value, root) {
   const items = value === undefined ? [] : Array.isArray(value) ? value : [value];
   const artifacts = {};
 
@@ -315,7 +365,7 @@ function parseArtifacts(value) {
     if (!artifact) {
       throw appError('INVALID_ARTIFACT', `Artifact path is empty for kind: ${kind}`);
     }
-    artifacts[kind] = artifact;
+    artifacts[kind] = normalizeArtifactForState(root, kind, artifact);
   }
 
   return artifacts;
@@ -336,13 +386,13 @@ async function commandInit(options) {
 
   const state = createState(requirement);
   await writeState(root, state);
-  return phasePayload(state);
+  return phasePayload(state, root);
 }
 
 async function commandNext(options) {
   const root = normalizeRoot(options);
   const state = await readState(root);
-  return phasePayload(state);
+  return phasePayload(state, root);
 }
 
 async function commandAdvance(options) {
@@ -363,7 +413,7 @@ async function commandAdvance(options) {
     throw appError('ARCHIVE_REQUIRES_COMMAND', 'Use the archive command to generate the archive artifact.');
   }
 
-  const artifacts = parseArtifacts(options.artifact);
+  const artifacts = parseArtifacts(options.artifact, root);
   const requiredKind = artifactKindForCompletedPhase(completed);
   if (requiredKind && !artifacts[requiredKind]) {
     throw appError('ARTIFACT_REQUIRED', `Completing ${completed} requires --artifact ${requiredKind}=<path>.`, {
@@ -384,7 +434,7 @@ async function commandAdvance(options) {
 
   state.current_gate = state.phase === 'docs_confirm' || state.phase === 'dev_confirm' ? state.phase : null;
   await writeState(root, state);
-  return phasePayload(state);
+  return phasePayload(state, root);
 }
 
 function artifactKindForCompletedPhase(phase) {
@@ -414,7 +464,7 @@ async function commandGate(options) {
   state.phase = NEXT_PHASE[confirm];
   state.current_gate = null;
   await writeState(root, state);
-  return phasePayload(state);
+  return phasePayload(state, root);
 }
 
 async function commandArchive(options) {
@@ -455,7 +505,7 @@ async function commandArchive(options) {
   await writeState(root, state);
 
   return {
-    ...phasePayload(state),
+    ...phasePayload(state, root),
     archive_path: archivePath,
   };
 }

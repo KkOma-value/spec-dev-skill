@@ -101,4 +101,4 @@ sequenceDiagram
 
 ## 产出
 
-写入 `spec-dev/tech/{requirement_name}-tech.md`
+写入执行器返回的 `expected_output_file` 绝对路径。完成后推进状态时，artifact 使用执行器返回的 `expected_output` 项目相对路径：`spec-dev/tech/{requirement_name}-tech.md`。

@@ -36,7 +36,7 @@ research → prd → tech → docs_confirm → spec → dev → dev_confirm → 
 ## 调度契约
 
 1. 解析 skill 根目录为当前 `SKILL.md` 所在目录。
-2. 解析项目根目录为用户当前工作区根目录。
+2. 解析项目根目录为用户指定的目标项目路径；未指定时使用用户当前工作区根目录。后续所有项目产物都必须以该根目录为准。
 3. 如果项目内不存在 `spec-dev/.state.json` 且本轮有需求描述，运行：
 
    ```bash
@@ -49,11 +49,12 @@ research → prd → tech → docs_confirm → spec → dev → dev_confirm → 
    node <skill-root>/scripts/spec-dev.mjs next --root <project-root>
    ```
 
-5. 只读取 JSON 中 `required_reads` 列出的文件：
+5. 优先读取 JSON 中 `required_read_files` 列出的绝对路径；兼容旧版本时再按 `required_reads` 解析：
    - `agents/*` 和 `references/*` 路径相对 skill 根目录。
    - `spec-dev/*` 路径相对项目根目录。
-6. 按 JSON 中 `message` 执行当前阶段，不主动加载其他阶段的大段说明。
-7. 阶段完成后调用对应命令推进状态。
+6. 生成 PRD、Tech、Spec 等文档时，必须写入 JSON 中 `expected_output_file` 给出的绝对路径；不要把 `expected_output` 当作当前 shell 目录下的相对路径写入。
+7. 按 JSON 中 `message` 执行当前阶段，不主动加载其他阶段的大段说明。
+8. 阶段完成后调用对应命令推进状态；记录 artifact 时优先传 `expected_output` 的项目相对路径，执行器会校验并归一化路径。
 
 ## JS 执行器命令
 
@@ -75,7 +76,13 @@ node scripts/spec-dev.mjs validate --root <projectRoot>
   "phase": "prd",
   "current_gate": null,
   "required_reads": ["agents/prd-writer.md", "references/prd-template.md"],
+  "required_read_files": [
+    "/absolute/skill-root/agents/prd-writer.md",
+    "/absolute/skill-root/references/prd-template.md"
+  ],
   "expected_output": "spec-dev/prd/<requirement_name>-prd.md",
+  "expected_output_file": "/absolute/project-root/spec-dev/prd/<requirement_name>-prd.md",
+  "project_root": "/absolute/project-root",
   "message": "短指令，供 AI 本轮执行"
 }
 ```
@@ -83,10 +90,10 @@ node scripts/spec-dev.mjs validate --root <projectRoot>
 ## 阶段推进规则
 
 - `research` 完成：`advance --completed research`
-- `prd` 完成：必须调用 `advance --completed prd --artifact prd=<path>`
-- `tech` 完成：必须调用 `advance --completed tech --artifact tech=<path>`，进入 `docs_confirm`
+- `prd` 完成：必须调用 `advance --completed prd --artifact prd=<expected_output>`
+- `tech` 完成：必须调用 `advance --completed tech --artifact tech=<expected_output>`，进入 `docs_confirm`
 - 用户确认 `docs_confirm`：`gate --confirm docs_confirm`
-- `spec` 完成：必须调用 `advance --completed spec --artifact spec=<path>`
+- `spec` 完成：必须调用 `advance --completed spec --artifact spec=<expected_output>`
 - `dev` 完成：`advance --completed dev`，进入 `dev_confirm`
 - 用户确认 `dev_confirm`：`gate --confirm dev_confirm`
 - `archive` 阶段：`archive`
