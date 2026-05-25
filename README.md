@@ -28,7 +28,7 @@
 
 ---
 
-**spec-dev** is a requirement-to-delivery skill for Codex and Claude Code. It ships a thin `SKILL.md` plus a zero-dependency Node.js executor, so the AI only loads the current phase instructions instead of carrying the entire workflow in context every turn.
+**spec-dev** is a requirement-to-delivery skill for Codex and Claude Code. Instead of loading the entire workflow into context every turn, a thin `SKILL.md` delegates to a zero-dependency Node.js executor that returns only the current phase's instructions.
 
 ## Workflow
 
@@ -81,13 +81,13 @@ Plain text also works: `spec-dev: <your requirement>` or `spec-dev：<your requi
 
 ## How It Works
 
-The skill entry file only describes the trigger and orchestration contract. On every turn the AI runs:
+The entry file (`SKILL.md`) defines the trigger and orchestration contract. Each turn, the AI runs:
 
 ```bash
 node <skill-root>/scripts/spec-dev.mjs next --root <project-root>
 ```
 
-The executor reads `spec-dev/.state.json` and returns JSON like:
+The executor reads `spec-dev/.state.json` and returns:
 
 ```json
 {
@@ -103,7 +103,7 @@ The AI reads only the files listed in `required_reads`:
 - `agents/*` and `references/*` resolve relative to the skill directory.
 - `spec-dev/*` files resolve relative to the target project root.
 
-This keeps context usage minimal at every turn.
+Context stays small — only the files relevant to the current phase are loaded.
 
 ## CLI Reference
 
@@ -120,7 +120,7 @@ node scripts/spec-dev.mjs validate --root <projectRoot>
 
 All commands print JSON to stdout. Errors also print JSON and return a non-zero exit code.
 
-`--artifact` is required when completing `prd`, `tech`, or `spec`. The `archive` phase must be completed with the dedicated `archive` command so the archive file is actually generated.
+`--artifact` is required when completing `prd`, `tech`, or `spec`. The `archive` phase has its own dedicated `archive` command to ensure the archive file is generated.
 
 ### Typical Session
 
@@ -139,7 +139,7 @@ node scripts/spec-dev.mjs archive --root .
 
 ## Project Output
 
-After a full run the target project gets:
+A completed run produces the following in the target project:
 
 ```text
 spec-dev/
@@ -185,7 +185,7 @@ spec-dev-skill/
 node --test test/spec-dev.test.mjs
 ```
 
-Tests cover initialization, per-phase lazy-read hints, ordered phase advancement, gate confirmation, archive generation, and validation failure modes.
+Covers initialization, per-phase lazy-read hints, phase advancement order, gate confirmation, archive generation, and validation failure modes.
 
 ## License
 
