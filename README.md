@@ -36,6 +36,8 @@
 
 **spec-dev** turns a natural-language requirement into a complete delivery pipeline: research, documentation, UI/UX design, frontend & backend implementation, quality audit, and archive — all governed by a zero-dependency JS state machine that keeps context minimal by loading only what each phase needs.
 
+> 📖 [中文](README.zh.md)
+
 ## Why spec-dev?
 
 | Problem | spec-dev's answer |
