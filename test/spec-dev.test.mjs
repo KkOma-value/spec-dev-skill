@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cliPath = path.join(repoRoot, 'scripts', 'spec-dev.mjs');
@@ -40,17 +40,26 @@ function runCli(args, options = {}) {
 }
 
 async function readState(root) {
-  return JSON.parse(await readFile(path.join(root, 'spec-dev', '.state.json'), 'utf8'));
+  return JSON.parse(await readFile(path.join(root, '.spec-dev', 'state.json'), 'utf8'));
 }
 
 async function writeState(root, state) {
-  await mkdir(path.join(root, 'spec-dev'), { recursive: true });
-  await writeFile(path.join(root, 'spec-dev', '.state.json'), `${JSON.stringify(state, null, 2)}\n`);
+  await mkdir(path.join(root, '.spec-dev'), { recursive: true });
+  await writeFile(path.join(root, '.spec-dev', 'state.json'), `${JSON.stringify(state, null, 2)}\n`);
+}
+
+async function exists(file) {
+  try {
+    await access(file);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function baseState(overrides = {}) {
   return {
-    schema_version: 2,
+    schema_version: 3,
     mode: 'new',
     phase: 'research',
     requirement: 'Add status query API',
@@ -59,12 +68,14 @@ function baseState(overrides = {}) {
     phases_completed: [],
     current_gate: null,
     artifacts: {
-      prd: null,
-      tech: null,
-      uiux: null,
-      spec: null,
-      quality: null,
-      archive: null,
+      research: 'output/add-status-query-api-research.md',
+      prd: 'output/add-status-query-api-prd.md',
+      architecture: 'output/add-status-query-api-architecture.md',
+      uiux: 'output/add-status-query-api-uiux.md',
+      proposal: '.spec-dev/changes/add-status-query-api/proposal.md',
+      tasks: '.spec-dev/changes/add-status-query-api/tasks.md',
+      quality: 'output/add-status-query-api-quality-report.md',
+      delivery: null,
     },
     quality: {
       security_passed: false,
@@ -76,23 +87,20 @@ function baseState(overrides = {}) {
   };
 }
 
-// Helper: create stub artifact files
-async function createStubArtifacts(root, name) {
-  await mkdir(path.join(root, 'spec-dev', 'prd'), { recursive: true });
-  await mkdir(path.join(root, 'spec-dev', 'tech'), { recursive: true });
-  await mkdir(path.join(root, 'spec-dev', 'uiux'), { recursive: true });
-  await mkdir(path.join(root, 'spec-dev', 'spec'), { recursive: true });
-  await writeFile(path.join(root, 'spec-dev', 'prd', `${name}-prd.md`), '# PRD\n');
-  await writeFile(path.join(root, 'spec-dev', 'tech', `${name}-tech.md`), '# Tech\n');
-  await writeFile(path.join(root, 'spec-dev', 'uiux', `${name}-uiux.md`), '# UIUX\n');
-  await writeFile(path.join(root, 'spec-dev', 'spec', `${name}-tasks.md`), '[x] 1. Done\n[x] 2. Done\n');
+async function createArtifactFiles(root, state = baseState()) {
+  await mkdir(path.join(root, 'output'), { recursive: true });
+  await mkdir(path.join(root, '.spec-dev', 'changes', state.requirement_name), { recursive: true });
+  for (const key of ['research', 'prd', 'architecture', 'uiux', 'quality']) {
+    await writeFile(path.join(root, state.artifacts[key]), `# ${key}\n`);
+  }
+  await writeFile(path.join(root, state.artifacts.proposal), '# Proposal\n');
+  await writeFile(
+    path.join(root, state.artifacts.tasks),
+    '[] 1. Pending\n[x] 2. Done\n[x] 3. Also done\n',
+  );
 }
 
-// ============================================================
-// INIT tests
-// ============================================================
-
-test('init creates project directories and research state (new mode)', async () => {
+test('init creates .spec-dev state and session brief for new mode', async () => {
   await withTempProject(async (root) => {
     const result = runCli(['init', '--root', root, '--requirement', '为订单服务新增按订单状态分页查询接口']);
 
@@ -100,64 +108,32 @@ test('init creates project directories and research state (new mode)', async () 
     assert.equal(result.json.phase, 'research');
     assert.equal(result.json.mode, 'new');
     assert.deepEqual(result.json.required_reads, ['agents/researcher.md']);
-    assert.equal(result.json.current_gate, null);
+    assert.deepEqual(result.json.expected_outputs, [
+      'output/wei-ding-dan-fu-wu-xin-zeng-an-ding-dan-zhuang-tai-fen-ye-cha-xun-jie-kou-research.md',
+    ]);
 
     const state = await readState(root);
-    assert.equal(state.schema_version, 2);
+    assert.equal(state.schema_version, 3);
     assert.equal(state.phase, 'research');
-    assert.equal(state.mode, 'new');
-    assert.equal(state.requirement, '为订单服务新增按订单状态分页查询接口');
     assert.equal(state.requirement_name, 'wei-ding-dan-fu-wu-xin-zeng-an-ding-dan-zhuang-tai-fen-ye-cha-xun-jie-kou');
-    assert.deepEqual(state.phases_completed, []);
-    assert.deepEqual(state.quality, {
-      security_passed: false,
-      code_review_passed: false,
-      build_passed: false,
-      coverage_passed: false,
-    });
+    assert.equal(await exists(path.join(root, '.spec-dev', 'SESSION_BRIEF.md')), true);
+    assert.equal(await exists(path.join(root, 'spec-dev', '.state.json')), false);
   });
 });
 
-test('init new mode starts at research phase', async () => {
+test('init evolve and patch modes start with baseline', async () => {
   await withTempProject(async (root) => {
-    const result = runCli(['init', '--root', root, '--requirement', 'Test feature', '--mode', 'new']);
-    assert.equal(result.status, 0, result.stderr || JSON.stringify(result.json));
-    assert.equal(result.json.phase, 'research');
-    assert.equal(result.json.mode, 'new');
+    const evolve = runCli(['init', '--root', root, '--requirement', 'Evolve feature', '--mode', 'evolve']);
+    assert.equal(evolve.status, 0, evolve.stderr);
+    assert.equal(evolve.json.phase, 'baseline');
+    assert.equal(evolve.json.mode, 'evolve');
   });
-});
 
-test('init patch mode starts at frontend phase', async () => {
   await withTempProject(async (root) => {
-    const result = runCli(['init', '--root', root, '--requirement', 'Quick fix', '--mode', 'patch']);
-    assert.equal(result.status, 0, result.stderr || JSON.stringify(result.json));
-    assert.equal(result.json.phase, 'frontend');
-    assert.equal(result.json.mode, 'patch');
-  });
-});
-
-test('init evolve mode starts at spec phase when artifacts exist', async () => {
-  await withTempProject(async (root) => {
-    const name = 'test-feature';
-    await mkdir(path.join(root, 'spec-dev', 'prd'), { recursive: true });
-    await mkdir(path.join(root, 'spec-dev', 'tech'), { recursive: true });
-    await mkdir(path.join(root, 'spec-dev', 'uiux'), { recursive: true });
-    await writeFile(path.join(root, 'spec-dev', 'prd', `${name}-prd.md`), '# PRD\n');
-    await writeFile(path.join(root, 'spec-dev', 'tech', `${name}-tech.md`), '# Tech\n');
-    await writeFile(path.join(root, 'spec-dev', 'uiux', `${name}-uiux.md`), '# UIUX\n');
-
-    const result = runCli(['init', '--root', root, '--requirement', 'Test feature', '--mode', 'evolve']);
-    assert.equal(result.status, 0, result.stderr || JSON.stringify(result.json));
-    assert.equal(result.json.phase, 'spec');
-    assert.equal(result.json.mode, 'evolve');
-  });
-});
-
-test('init evolve mode fails when artifacts are missing', async () => {
-  await withTempProject(async (root) => {
-    const result = runCli(['init', '--root', root, '--requirement', 'Test feature', '--mode', 'evolve']);
-    assert.notEqual(result.status, 0);
-    assert.equal(result.json.error.code, 'MISSING_PREREQUISITE_ARTIFACTS');
+    const patch = runCli(['init', '--root', root, '--requirement', 'Fix login loop', '--mode', 'patch']);
+    assert.equal(patch.status, 0, patch.stderr);
+    assert.equal(patch.json.phase, 'baseline');
+    assert.equal(patch.json.mode, 'patch');
   });
 });
 
@@ -169,49 +145,37 @@ test('init rejects invalid mode', async () => {
   });
 });
 
-// ============================================================
-// NEXT tests (v3 phase chain)
-// ============================================================
-
-test('next returns minimal reads and expected output for each v3 phase', async () => {
+test('next returns minimal reads and expected outputs for the governed phase chain', async () => {
   const cases = [
+    { phase: 'baseline', reads: [], outputs: [], gate: null },
+    { phase: 'research', reads: ['agents/researcher.md'], outputs: ['output/add-status-query-api-research.md'], gate: null },
     {
-      phase: 'research',
-      reads: ['agents/researcher.md'],
-      expectedOutput: null,
-      gate: null,
-    },
-    {
-      phase: 'prd',
-      reads: ['agents/prd-writer.md', 'references/prd-template.md'],
-      expectedOutput: 'spec-dev/prd/add-status-query-api-prd.md',
-      gate: null,
-    },
-    {
-      phase: 'tech',
-      reads: ['agents/tech-writer.md', 'references/tech-template.md'],
-      expectedOutput: 'spec-dev/tech/add-status-query-api-tech.md',
-      gate: null,
-    },
-    {
-      phase: 'uiux',
+      phase: 'docs',
       reads: [
+        'agents/prd-writer.md',
+        'agents/architecture-writer.md',
         'agents/ui-designer.md',
+        'references/prd-template.md',
+        'references/architecture-template.md',
         'references/uiux-template.md',
-        'spec-dev/prd/add-status-query-api-prd.md',
-        'spec-dev/tech/add-status-query-api-tech.md',
+        'references/uiux-pro-max-adapter.md',
+        'output/add-status-query-api-research.md',
       ],
-      expectedOutput: 'spec-dev/uiux/add-status-query-api-uiux.md',
+      outputs: [
+        'output/add-status-query-api-prd.md',
+        'output/add-status-query-api-architecture.md',
+        'output/add-status-query-api-uiux.md',
+      ],
       gate: null,
     },
     {
       phase: 'docs_confirm',
       reads: [
-        'spec-dev/prd/add-status-query-api-prd.md',
-        'spec-dev/tech/add-status-query-api-tech.md',
-        'spec-dev/uiux/add-status-query-api-uiux.md',
+        'output/add-status-query-api-prd.md',
+        'output/add-status-query-api-architecture.md',
+        'output/add-status-query-api-uiux.md',
       ],
-      expectedOutput: null,
+      outputs: [],
       gate: 'docs_confirm',
     },
     {
@@ -219,32 +183,48 @@ test('next returns minimal reads and expected output for each v3 phase', async (
       reads: [
         'agents/spec-generator.md',
         'references/spec-template.md',
-        'spec-dev/prd/add-status-query-api-prd.md',
-        'spec-dev/tech/add-status-query-api-tech.md',
-        'spec-dev/uiux/add-status-query-api-uiux.md',
+        'output/add-status-query-api-prd.md',
+        'output/add-status-query-api-architecture.md',
+        'output/add-status-query-api-uiux.md',
       ],
-      expectedOutput: 'spec-dev/spec/add-status-query-api-tasks.md',
+      outputs: [
+        '.spec-dev/changes/add-status-query-api/proposal.md',
+        '.spec-dev/changes/add-status-query-api/tasks.md',
+      ],
+      gate: null,
+    },
+    {
+      phase: 'pre_code',
+      reads: [
+        '.spec-dev/PRE_CODE_CHECKLIST.md',
+        'output/add-status-query-api-prd.md',
+        'output/add-status-query-api-architecture.md',
+        'output/add-status-query-api-uiux.md',
+        '.spec-dev/changes/add-status-query-api/tasks.md',
+      ],
+      outputs: [],
       gate: null,
     },
     {
       phase: 'frontend',
-      reads: ['spec-dev/spec/add-status-query-api-tasks.md'],
-      expectedOutput: null,
+      reads: [
+        '.spec-dev/changes/add-status-query-api/tasks.md',
+        'output/add-status-query-api-uiux.md',
+        '.spec-dev/PRE_CODE_CHECKLIST.md',
+      ],
+      outputs: [],
       gate: null,
     },
     {
       phase: 'preview_confirm',
-      reads: [
-        'spec-dev/spec/add-status-query-api-tasks.md',
-        'spec-dev/uiux/add-status-query-api-uiux.md',
-      ],
-      expectedOutput: null,
+      reads: ['.spec-dev/changes/add-status-query-api/tasks.md', 'output/add-status-query-api-uiux.md'],
+      outputs: [],
       gate: 'preview_confirm',
     },
     {
       phase: 'backend',
-      reads: ['spec-dev/spec/add-status-query-api-tasks.md'],
-      expectedOutput: null,
+      reads: ['.spec-dev/changes/add-status-query-api/tasks.md', 'output/add-status-query-api-architecture.md'],
+      outputs: [],
       gate: null,
     },
     {
@@ -253,428 +233,263 @@ test('next returns minimal reads and expected output for each v3 phase', async (
         'agents/quality-reviewer.md',
         'agents/security-reviewer.md',
         'references/quality-checklist.md',
-        'spec-dev/spec/add-status-query-api-tasks.md',
+        '.spec-dev/changes/add-status-query-api/tasks.md',
+        'output/add-status-query-api-prd.md',
+        'output/add-status-query-api-architecture.md',
+        'output/add-status-query-api-uiux.md',
       ],
-      expectedOutput: 'spec-dev/quality/add-status-query-api-quality-report.md',
+      outputs: ['output/add-status-query-api-quality-report.md'],
       gate: null,
     },
     {
-      phase: 'archive',
-      reads: ['references/archive-template.md'],
-      expectedOutput: 'spec-dev/archive/<YYYY-MM-DD>-add-status-query-api.md',
+      phase: 'delivery',
+      reads: [
+        'references/delivery-template.md',
+        'output/add-status-query-api-research.md',
+        'output/add-status-query-api-prd.md',
+        'output/add-status-query-api-architecture.md',
+        'output/add-status-query-api-uiux.md',
+        '.spec-dev/changes/add-status-query-api/tasks.md',
+        'output/add-status-query-api-quality-report.md',
+      ],
+      outputs: ['output/<YYYY-MM-DD>-add-status-query-api-delivery.md'],
       gate: null,
     },
-    {
-      phase: 'done',
-      reads: [],
-      expectedOutput: null,
-      gate: null,
-    },
+    { phase: 'done', reads: [], outputs: [], gate: null },
   ];
 
   for (const item of cases) {
     await withTempProject(async (root) => {
-      await writeState(
-        root,
-        baseState({
-          phase: item.phase,
-          current_gate: item.gate,
-          artifacts: {
-            prd: 'spec-dev/prd/add-status-query-api-prd.md',
-            tech: 'spec-dev/tech/add-status-query-api-tech.md',
-            uiux: 'spec-dev/uiux/add-status-query-api-uiux.md',
-            spec: 'spec-dev/spec/add-status-query-api-tasks.md',
-            quality: null,
-            archive: null,
-          },
-        }),
-      );
+      await writeState(root, baseState({ phase: item.phase, current_gate: item.gate }));
 
       const result = runCli(['next', '--root', root]);
 
-      assert.equal(result.status, 0, `${item.phase}: ${result.stderr}`);
+      assert.equal(result.status, 0, `${item.phase}: ${result.stderr || JSON.stringify(result.json)}`);
       assert.equal(result.json.phase, item.phase);
-      assert.equal(result.json.mode, 'new');
       assert.deepEqual(result.json.required_reads, item.reads);
-      assert.equal(result.json.expected_output, item.expectedOutput);
+      assert.deepEqual(result.json.expected_outputs, item.outputs);
+      assert.equal(result.json.expected_output, item.outputs.length === 1 ? item.outputs[0] : null);
       assert.equal(result.json.current_gate, item.gate);
     });
   }
 });
 
-// ============================================================
-// ADVANCE tests
-// ============================================================
-
-test('advance enforces phase order and records artifacts', async () => {
+test('research, docs, spec, and quality phases require their artifacts', async () => {
   await withTempProject(async (root) => {
-    await writeState(root, baseState({ phase: 'prd', phases_completed: ['research'] }));
+    await writeState(root, baseState({ phase: 'research', artifacts: { ...baseState().artifacts, research: null } }));
+    const missingResearch = runCli(['advance', '--root', root, '--completed', 'research']);
+    assert.notEqual(missingResearch.status, 0);
+    assert.equal(missingResearch.json.error.kind, 'research');
 
-    const skipped = runCli(['advance', '--root', root, '--completed', 'tech']);
-    assert.notEqual(skipped.status, 0);
-    assert.equal(skipped.json.error.code, 'PHASE_MISMATCH');
-
-    const advanced = runCli([
+    const research = runCli([
       'advance',
       '--root',
       root,
       '--completed',
-      'prd',
+      'research',
       '--artifact',
-      'prd=spec-dev/prd/add-status-query-api-prd.md',
+      'research=output/add-status-query-api-research.md',
     ]);
+    assert.equal(research.status, 0, research.stderr);
+    assert.equal(research.json.phase, 'docs');
 
-    assert.equal(advanced.status, 0, advanced.stderr);
-    assert.equal(advanced.json.phase, 'tech');
+    const missingDocs = runCli(['advance', '--root', root, '--completed', 'docs', '--artifact', 'prd=output/add-status-query-api-prd.md']);
+    assert.notEqual(missingDocs.status, 0);
+    assert.equal(missingDocs.json.error.kind, 'architecture');
 
-    const state = await readState(root);
-    assert.deepEqual(state.phases_completed, ['research', 'prd']);
-    assert.equal(state.artifacts.prd, 'spec-dev/prd/add-status-query-api-prd.md');
-  });
-});
-
-test('advance requires artifacts for artifact-producing phases', async () => {
-  await withTempProject(async (root) => {
-    await writeState(root, baseState({ phase: 'prd', phases_completed: ['research'] }));
-
-    const missingPrd = runCli(['advance', '--root', root, '--completed', 'prd']);
-    assert.notEqual(missingPrd.status, 0);
-    assert.equal(missingPrd.json.error.code, 'ARTIFACT_REQUIRED');
-    assert.equal(missingPrd.json.error.kind, 'prd');
-
-    await writeState(root, baseState({ phase: 'tech', phases_completed: ['research', 'prd'] }));
-    const missingTech = runCli(['advance', '--root', root, '--completed', 'tech']);
-    assert.notEqual(missingTech.status, 0);
-    assert.equal(missingTech.json.error.code, 'ARTIFACT_REQUIRED');
-    assert.equal(missingTech.json.error.kind, 'tech');
-
-    await writeState(root, baseState({ phase: 'uiux', phases_completed: ['research', 'prd', 'tech'] }));
-    const missingUiux = runCli(['advance', '--root', root, '--completed', 'uiux']);
-    assert.notEqual(missingUiux.status, 0);
-    assert.equal(missingUiux.json.error.code, 'ARTIFACT_REQUIRED');
-    assert.equal(missingUiux.json.error.kind, 'uiux');
-  });
-});
-
-test('advance cannot mark archive complete without generating archive file', async () => {
-  await withTempProject(async (root) => {
-    await writeState(root, baseState({ phase: 'archive' }));
-
-    const result = runCli(['advance', '--root', root, '--completed', 'archive']);
-    assert.notEqual(result.status, 0);
-    assert.equal(result.json.error.code, 'ARCHIVE_REQUIRES_COMMAND');
-  });
-});
-
-test('advance enters docs_confirm gate after uiux completion', async () => {
-  await withTempProject(async (root) => {
-    await writeState(
+    const docs = runCli([
+      'advance',
+      '--root',
       root,
-      baseState({
-        phase: 'uiux',
-        phases_completed: ['research', 'prd', 'tech'],
-        artifacts: {
-          prd: 'spec-dev/prd/add-status-query-api-prd.md',
-          tech: 'spec-dev/tech/add-status-query-api-tech.md',
-          uiux: null,
-          spec: null,
-          quality: null,
-          archive: null,
-        },
-      }),
-    );
-
-    const uiux = runCli(['advance', '--root', root, '--completed', 'uiux', '--artifact', 'uiux=spec-dev/uiux/add-status-query-api-uiux.md']);
-    assert.equal(uiux.status, 0, uiux.stderr);
-    assert.equal(uiux.json.phase, 'docs_confirm');
-    assert.equal(uiux.json.current_gate, 'docs_confirm');
-  });
-});
-
-test('advance enters preview_confirm gate after frontend completion', async () => {
-  await withTempProject(async (root) => {
-    await writeState(
-      root,
-      baseState({
-        phase: 'frontend',
-        phases_completed: ['research', 'prd', 'tech', 'uiux', 'docs_confirm', 'spec'],
-        artifacts: {
-          prd: 'spec-dev/prd/add-status-query-api-prd.md',
-          tech: 'spec-dev/tech/add-status-query-api-tech.md',
-          uiux: 'spec-dev/uiux/add-status-query-api-uiux.md',
-          spec: 'spec-dev/spec/add-status-query-api-tasks.md',
-          quality: null,
-          archive: null,
-        },
-      }),
-    );
-
-    const fe = runCli(['advance', '--root', root, '--completed', 'frontend']);
-    assert.equal(fe.status, 0, fe.stderr);
-    assert.equal(fe.json.phase, 'preview_confirm');
-    assert.equal(fe.json.current_gate, 'preview_confirm');
-  });
-});
-
-// ============================================================
-// GATE tests
-// ============================================================
-
-test('gate confirms docs_confirm and preview_confirm', async () => {
-  // docs_confirm gate
-  await withTempProject(async (root) => {
-    await writeState(
-      root,
-      baseState({
-        phase: 'docs_confirm',
-        current_gate: 'docs_confirm',
-        artifacts: {
-          prd: 'spec-dev/prd/add-status-query-api-prd.md',
-          tech: 'spec-dev/tech/add-status-query-api-tech.md',
-          uiux: 'spec-dev/uiux/add-status-query-api-uiux.md',
-          spec: null,
-          quality: null,
-          archive: null,
-        },
-      }),
-    );
+      '--completed',
+      'docs',
+      '--artifact',
+      'prd=output/add-status-query-api-prd.md',
+      '--artifact',
+      'architecture=output/add-status-query-api-architecture.md',
+      '--artifact',
+      'uiux=output/add-status-query-api-uiux.md',
+    ]);
+    assert.equal(docs.status, 0, docs.stderr);
+    assert.equal(docs.json.phase, 'docs_confirm');
+    assert.equal(docs.json.current_gate, 'docs_confirm');
 
     const confirmed = runCli(['gate', '--root', root, '--confirm', 'docs_confirm']);
     assert.equal(confirmed.status, 0, confirmed.stderr);
     assert.equal(confirmed.json.phase, 'spec');
-    assert.equal(confirmed.json.current_gate, null);
 
-    const state = await readState(root);
-    assert.deepEqual(state.phases_completed, ['docs_confirm']);
-  });
-
-  // preview_confirm gate
-  await withTempProject(async (root) => {
-    await writeState(
+    const missingSpec = runCli([
+      'advance',
+      '--root',
       root,
-      baseState({
-        phase: 'preview_confirm',
-        current_gate: 'preview_confirm',
-        artifacts: {
-          prd: 'spec-dev/prd/add-status-query-api-prd.md',
-          tech: 'spec-dev/tech/add-status-query-api-tech.md',
-          uiux: 'spec-dev/uiux/add-status-query-api-uiux.md',
-          spec: 'spec-dev/spec/add-status-query-api-tasks.md',
-          quality: null,
-          archive: null,
-        },
-      }),
-    );
+      '--completed',
+      'spec',
+      '--artifact',
+      'proposal=.spec-dev/changes/add-status-query-api/proposal.md',
+    ]);
+    assert.notEqual(missingSpec.status, 0);
+    assert.equal(missingSpec.json.error.kind, 'tasks');
 
-    const confirmed = runCli(['gate', '--root', root, '--confirm', 'preview_confirm']);
-    assert.equal(confirmed.status, 0, confirmed.stderr);
-    assert.equal(confirmed.json.phase, 'backend');
-    assert.equal(confirmed.json.current_gate, null);
+    const spec = runCli([
+      'advance',
+      '--root',
+      root,
+      '--completed',
+      'spec',
+      '--artifact',
+      'proposal=.spec-dev/changes/add-status-query-api/proposal.md',
+      '--artifact',
+      'tasks=.spec-dev/changes/add-status-query-api/tasks.md',
+    ]);
+    assert.equal(spec.status, 0, spec.stderr);
+    assert.equal(spec.json.phase, 'pre_code');
+    assert.equal(await exists(path.join(root, '.spec-dev', 'PRE_CODE_CHECKLIST.md')), true);
+
+    await writeState(root, baseState({ phase: 'quality' }));
+    const missingQuality = runCli(['advance', '--root', root, '--completed', 'quality']);
+    assert.notEqual(missingQuality.status, 0);
+    assert.equal(missingQuality.json.error.kind, 'quality');
   });
 });
 
-test('gate only confirms the matching current gate', async () => {
+test('pre_code phase blocks until checklist is complete', async () => {
   await withTempProject(async (root) => {
-    await writeState(
-      root,
-      baseState({
-        phase: 'docs_confirm',
-        current_gate: 'docs_confirm',
-        artifacts: {
-          prd: 'spec-dev/prd/add-status-query-api-prd.md',
-          tech: 'spec-dev/tech/add-status-query-api-tech.md',
-          uiux: 'spec-dev/uiux/add-status-query-api-uiux.md',
-          spec: null,
-          quality: null,
-          archive: null,
-        },
-      }),
-    );
+    const state = baseState({ phase: 'pre_code' });
+    await writeState(root, state);
+    await mkdir(path.join(root, '.spec-dev'), { recursive: true });
+    await writeFile(path.join(root, '.spec-dev', 'PRE_CODE_CHECKLIST.md'), '- [ ] Read docs\n- [x] Done item\n');
+
+    const blocked = runCli(['advance', '--root', root, '--completed', 'pre_code']);
+    assert.notEqual(blocked.status, 0);
+    assert.equal(blocked.json.error.code, 'PRE_CODE_CHECKLIST_INCOMPLETE');
+    assert.deepEqual(blocked.json.error.incomplete, ['- [ ] Read docs']);
+
+    await writeFile(path.join(root, '.spec-dev', 'PRE_CODE_CHECKLIST.md'), '- [x] Read docs\n- [x] Done item\n');
+    const advanced = runCli(['advance', '--root', root, '--completed', 'pre_code']);
+    assert.equal(advanced.status, 0, advanced.stderr);
+    assert.equal(advanced.json.phase, 'frontend');
+  });
+});
+
+test('gate confirms only matching docs_confirm and preview_confirm gates', async () => {
+  await withTempProject(async (root) => {
+    await writeState(root, baseState({ phase: 'docs_confirm', current_gate: 'docs_confirm' }));
 
     const wrong = runCli(['gate', '--root', root, '--confirm', 'preview_confirm']);
     assert.notEqual(wrong.status, 0);
     assert.equal(wrong.json.error.code, 'GATE_MISMATCH');
 
-    const invalid = runCli(['gate', '--root', root, '--confirm', 'nonexistent']);
-    assert.notEqual(invalid.status, 0);
-    assert.equal(invalid.json.error.code, 'INVALID_GATE');
+    const docs = runCli(['gate', '--root', root, '--confirm', 'docs_confirm']);
+    assert.equal(docs.status, 0, docs.stderr);
+    assert.equal(docs.json.phase, 'spec');
+  });
+
+  await withTempProject(async (root) => {
+    await writeState(root, baseState({ phase: 'preview_confirm', current_gate: 'preview_confirm' }));
+
+    const preview = runCli(['gate', '--root', root, '--confirm', 'preview_confirm']);
+    assert.equal(preview.status, 0, preview.stderr);
+    assert.equal(preview.json.phase, 'backend');
   });
 });
 
-// ============================================================
-// ARCHIVE tests
-// ============================================================
-
-test('archive creates a dated markdown summary with task counts', async () => {
+test('deliver creates dated output delivery report and archive remains an alias', async () => {
   await withTempProject(async (root) => {
-    await writeState(
-      root,
-      baseState({
-        phase: 'archive',
-        phases_completed: ['research', 'prd', 'tech', 'uiux', 'docs_confirm', 'spec', 'frontend', 'preview_confirm', 'backend', 'quality'],
-        artifacts: {
-          prd: 'spec-dev/prd/add-status-query-api-prd.md',
-          tech: 'spec-dev/tech/add-status-query-api-tech.md',
-          uiux: 'spec-dev/uiux/add-status-query-api-uiux.md',
-          spec: 'spec-dev/spec/add-status-query-api-tasks.md',
-          quality: 'spec-dev/quality/add-status-query-api-quality-report.md',
-          archive: null,
-        },
-      }),
-    );
-    await mkdir(path.join(root, 'spec-dev', 'prd'), { recursive: true });
-    await mkdir(path.join(root, 'spec-dev', 'tech'), { recursive: true });
-    await mkdir(path.join(root, 'spec-dev', 'spec'), { recursive: true });
-    await writeFile(path.join(root, 'spec-dev', 'prd', 'add-status-query-api-prd.md'), '# PRD\n');
-    await writeFile(path.join(root, 'spec-dev', 'tech', 'add-status-query-api-tech.md'), '# Tech\n');
-    await writeFile(
-      path.join(root, 'spec-dev', 'spec', 'add-status-query-api-tasks.md'),
-      '[] 1. Pending\n[Architecture](../arch.md)\n[x] 2. Done\n[x] 3. Also done\n',
-    );
+    const state = baseState({
+      phase: 'delivery',
+      phases_completed: ['research', 'docs', 'docs_confirm', 'spec', 'pre_code', 'frontend', 'preview_confirm', 'backend', 'quality'],
+    });
+    await writeState(root, state);
+    await createArtifactFiles(root, state);
 
-    const result = runCli(['archive', '--root', root], {
+    const result = runCli(['deliver', '--root', root], {
       env: { ...process.env, SPEC_DEV_DATE: '2026-05-25' },
     });
 
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.json.phase, 'done');
-    assert.equal(result.json.archive_path, 'spec-dev/archive/2026-05-25-add-status-query-api.md');
+    assert.equal(result.json.delivery_path, 'output/2026-05-25-add-status-query-api-delivery.md');
+    assert.equal(result.json.archive_path, result.json.delivery_path);
 
-    const archive = await readFile(path.join(root, result.json.archive_path), 'utf8');
-    assert.match(archive, /# add-status-query-api — 开发归档/);
-    assert.match(archive, /任务完成: 2\/3/);
-    assert.match(archive, /spec-dev\/prd\/add-status-query-api-prd\.md/);
-    assert.match(archive, /## 相关文档/);
-    assert.match(archive, /## 工作模式/);
-    assert.match(archive, /new/);
+    const delivery = await readFile(path.join(root, result.json.delivery_path), 'utf8');
+    assert.match(delivery, /# add-status-query-api - Delivery Report/);
+    assert.match(delivery, /Tasks completed: 2\/3/);
+    assert.match(delivery, /output\/add-status-query-api-architecture\.md/);
+  });
 
-    const state = await readState(root);
-    assert.equal(state.phase, 'done');
-    assert.equal(state.artifacts.archive, 'spec-dev/archive/2026-05-25-add-status-query-api.md');
+  await withTempProject(async (root) => {
+    const state = baseState({ phase: 'delivery' });
+    await writeState(root, state);
+    await createArtifactFiles(root, state);
+
+    const result = runCli(['archive', '--root', root], {
+      env: { ...process.env, SPEC_DEV_DATE: '2026-05-26' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.json.delivery_path, 'output/2026-05-26-add-status-query-api-delivery.md');
   });
 });
 
-test('archive rejects unsafe override dates and missing required artifacts', async () => {
+test('legacy spec-dev/.state.json is read and migrated to .spec-dev/state.json', async () => {
   await withTempProject(async (root) => {
-    await writeState(
-      root,
-      baseState({
-        phase: 'archive',
+    await mkdir(path.join(root, 'spec-dev'), { recursive: true });
+    await writeFile(
+      path.join(root, 'spec-dev', '.state.json'),
+      `${JSON.stringify({
+        schema_version: 2,
+        mode: 'new',
+        phase: 'tech',
+        requirement: 'Legacy feature',
+        requirement_name: 'legacy-feature',
+        created_at: '2026-05-25T00:00:00.000Z',
+        phases_completed: ['research', 'prd'],
+        current_gate: null,
         artifacts: {
-          prd: 'spec-dev/prd/add-status-query-api-prd.md',
-          tech: 'spec-dev/tech/add-status-query-api-tech.md',
+          prd: 'spec-dev/prd/legacy-feature-prd.md',
+          tech: 'spec-dev/tech/legacy-feature-tech.md',
           uiux: null,
-          spec: 'spec-dev/spec/add-status-query-api-tasks.md',
-          quality: null,
-          archive: null,
-        },
-      }),
-    );
-    await mkdir(path.join(root, 'spec-dev', 'prd'), { recursive: true });
-    await mkdir(path.join(root, 'spec-dev', 'tech'), { recursive: true });
-    await mkdir(path.join(root, 'spec-dev', 'spec'), { recursive: true });
-    await writeFile(path.join(root, 'spec-dev', 'prd', 'add-status-query-api-prd.md'), '# PRD\n');
-    await writeFile(path.join(root, 'spec-dev', 'tech', 'add-status-query-api-tech.md'), '# Tech\n');
-    await writeFile(path.join(root, 'spec-dev', 'spec', 'add-status-query-api-tasks.md'), '[] 1. Pending\n');
-
-    const unsafe = runCli(['archive', '--root', root], {
-      env: { ...process.env, SPEC_DEV_DATE: '../../etc' },
-    });
-    assert.notEqual(unsafe.status, 0);
-    assert.equal(unsafe.json.error.code, 'INVALID_ARCHIVE_DATE');
-
-    await rm(path.join(root, 'spec-dev', 'spec', 'add-status-query-api-tasks.md'));
-
-    const missingSpec = runCli(['archive', '--root', root], {
-      env: { ...process.env, SPEC_DEV_DATE: '2026-05-25' },
-    });
-    assert.notEqual(missingSpec.status, 0);
-    assert.equal(missingSpec.json.error.code, 'ARTIFACT_NOT_FOUND');
-    assert.deepEqual(missingSpec.json.error.missing, ['spec-dev/spec/add-status-query-api-tasks.md']);
-  });
-});
-
-// ============================================================
-// VALIDATE & ERROR tests
-// ============================================================
-
-test('next fails when a required prior artifact was not recorded', async () => {
-  await withTempProject(async (root) => {
-    await writeState(
-      root,
-      baseState({
-        phase: 'docs_confirm',
-        current_gate: 'docs_confirm',
-        artifacts: {
-          prd: null,
-          tech: 'spec-dev/tech/add-status-query-api-tech.md',
-          uiux: 'spec-dev/uiux/add-status-query-api-uiux.md',
           spec: null,
           quality: null,
           archive: null,
         },
-      }),
+        quality: {},
+      }, null, 2)}\n`,
     );
 
     const result = runCli(['next', '--root', root]);
-    assert.notEqual(result.status, 0);
-    assert.equal(result.json.error.code, 'ARTIFACT_REQUIRED');
-    assert.equal(result.json.error.kind, 'prd');
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.json.phase, 'docs');
+    assert.equal(result.json.artifacts.architecture, 'spec-dev/tech/legacy-feature-tech.md');
+
+    const migrated = await readState(root);
+    assert.equal(migrated.schema_version, 3);
+    assert.equal(migrated.phase, 'docs');
+    assert.equal(migrated.artifacts.architecture, 'spec-dev/tech/legacy-feature-tech.md');
+    assert.equal(await exists(path.join(root, '.spec-dev', 'state.json')), true);
   });
 });
 
-test('validate reports missing state, damaged json, missing artifacts, and done state', async () => {
+test('validate reports missing state, missing artifacts, and done state', async () => {
   await withTempProject(async (missingRoot) => {
     const result = runCli(['validate', '--root', missingRoot]);
     assert.notEqual(result.status, 0);
     assert.equal(result.json.error.code, 'STATE_NOT_FOUND');
   });
 
-  await withTempProject(async (damagedRoot) => {
-    await mkdir(path.join(damagedRoot, 'spec-dev'), { recursive: true });
-    await writeFile(path.join(damagedRoot, 'spec-dev', '.state.json'), '{broken');
-    const result = runCli(['validate', '--root', damagedRoot]);
-    assert.notEqual(result.status, 0);
-    assert.equal(result.json.error.code, 'STATE_INVALID_JSON');
-  });
-
   await withTempProject(async (root) => {
-    await writeState(
-      root,
-      baseState({
-        phase: 'docs_confirm',
-        current_gate: 'docs_confirm',
-        artifacts: {
-          prd: 'spec-dev/prd/add-status-query-api-prd.md',
-          tech: 'spec-dev/tech/add-status-query-api-tech.md',
-          uiux: 'spec-dev/uiux/add-status-query-api-uiux.md',
-          spec: null,
-          quality: null,
-          archive: null,
-        },
-      }),
-    );
-
+    await writeState(root, baseState({ phase: 'docs' }));
     const result = runCli(['validate', '--root', root]);
     assert.notEqual(result.status, 0);
     assert.equal(result.json.error.code, 'ARTIFACT_NOT_FOUND');
+    assert.deepEqual(result.json.error.missing, ['output/add-status-query-api-research.md']);
   });
 
-  await withTempProject(async (root) => {
-    await writeState(root, baseState({ phase: 'done' }));
-    const result = runCli(['validate', '--root', root]);
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.json.valid, true);
-    assert.equal(result.json.phase, 'done');
-    assert.equal(result.json.mode, 'new');
-  });
-});
-
-test('validate returns mode in payload', async () => {
   await withTempProject(async (root) => {
     await writeState(root, baseState({ phase: 'done', mode: 'patch' }));
     const result = runCli(['validate', '--root', root]);
     assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.json.valid, true);
+    assert.equal(result.json.phase, 'done');
     assert.equal(result.json.mode, 'patch');
   });
 });

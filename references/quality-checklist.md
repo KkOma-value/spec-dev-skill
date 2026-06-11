@@ -1,7 +1,7 @@
 # 质量门禁检查清单 — Quality Gate Checklist
 
-> 用于 quality-reviewer agent 在 dev_confirm 门禁阶段执行全面质量检查。
-> 所有检查项必须在归档前通过。未通过项按严重级别处理。
+> 用于 quality-reviewer agent 在 quality 阶段执行全面质量检查。
+> 所有检查项必须在 delivery 前通过。未通过项按严重级别处理。
 
 ---
 
@@ -17,7 +17,7 @@
 ## 通过标准
 
 - **通过（PASS）**：零 CRITICAL，零 HIGH。MEDIUM 项已记录并获确认。
-- **有条件通过（CONDITIONAL_PASS）**：零 CRITICAL，零 HIGH。MEDIUM 项已记录，用户确认后可归档。
+- **有条件通过（CONDITIONAL_PASS）**：零 CRITICAL，零 HIGH。MEDIUM 项已记录，用户确认后可进入 delivery。
 - **不通过（FAIL）**：存在任何 CRITICAL 或 HIGH 项。修复后重新检查。
 
 ---
@@ -192,7 +192,7 @@
 - [ ] `[HIGH]` 每个任务的验收标准已实际验证通过（非仅标记完成）
 - [ ] `[MED]` 任务完成时间已记录
 
-**检查方法**：逐项对比 `spec-dev/spec/{requirement_name}-tasks.md` 中的任务与实际代码变更。
+**检查方法**：逐项对比 `.spec-dev/changes/{requirement_name}/tasks.md` 中的任务与实际代码变更。
 
 ### 4.2 无冗余代码
 
@@ -325,7 +325,7 @@
 
 ## 检查执行流程
 
-1. **读取产物文档**：读取 PRD、Tech、Spec 和 UIUX（如适用）文档
+1. **读取产物文档**：读取 PRD、Architecture、Tasks 和 UIUX（如适用）文档
 2. **获取代码变更**：`git diff` 获取所有变更文件清单
 3. **逐节执行检查**：按上述 7 个章节的顺序执行检查
 4. **记录检查结果**：对每项标记 `[x]`（通过）/ `[ ]`（未通过）/ `N/A`（不适用）

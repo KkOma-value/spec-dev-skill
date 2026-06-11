@@ -1,46 +1,61 @@
 #!/usr/bin/env node
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const SCHEMA_VERSION = 2;
-const STATE_DIR = 'spec-dev';
-const STATE_FILE = '.state.json';
+const SCHEMA_VERSION = 3;
+const STATE_DIR = '.spec-dev';
+const STATE_FILE = 'state.json';
+const LEGACY_STATE_DIR = 'spec-dev';
+const LEGACY_STATE_FILE = '.state.json';
+const OUTPUT_DIR = 'output';
+const CHANGES_DIR = `${STATE_DIR}/changes`;
+const SESSION_BRIEF_FILE = 'SESSION_BRIEF.md';
+const PRE_CODE_CHECKLIST_FILE = 'PRE_CODE_CHECKLIST.md';
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SKILL_ROOT = path.resolve(SCRIPT_DIR, '..');
 
 const VALID_MODES = new Set(['new', 'evolve', 'patch']);
 
 const PHASES = [
+  'baseline',
   'research',
-  'prd',
-  'tech',
-  'uiux',
+  'docs',
   'docs_confirm',
   'spec',
+  'pre_code',
   'frontend',
   'preview_confirm',
   'backend',
   'quality',
-  'archive',
+  'delivery',
   'done',
 ];
 
 const NEXT_PHASE = {
-  research: 'prd',
-  prd: 'tech',
-  tech: 'uiux',
-  uiux: 'docs_confirm',
+  baseline: 'research',
+  research: 'docs',
+  docs: 'docs_confirm',
   docs_confirm: 'spec',
-  spec: 'frontend',
+  spec: 'pre_code',
+  pre_code: 'frontend',
   frontend: 'preview_confirm',
   preview_confirm: 'backend',
   backend: 'quality',
-  quality: 'archive',
-  archive: 'done',
+  quality: 'delivery',
+  delivery: 'done',
 };
 
-const ARTIFACT_KINDS = new Set(['prd', 'tech', 'uiux', 'spec', 'quality', 'archive']);
+const ARTIFACT_KINDS = new Set([
+  'research',
+  'prd',
+  'architecture',
+  'uiux',
+  'proposal',
+  'tasks',
+  'quality',
+  'delivery',
+]);
 
 const PINYIN_MAP = {
   '为': 'wei',
@@ -75,12 +90,10 @@ const PINYIN_MAP = {
   '微': 'wei',
   '设': 'she',
   '计': 'ji',
-  '页': 'ye',
   '面': 'mian',
   '界': 'jie',
   '交': 'jiao',
   '互': 'hu',
-  '设': 'she',
   '修': 'xiu',
   '复': 'fu',
   '补': 'bu',
@@ -88,7 +101,6 @@ const PINYIN_MAP = {
   '安': 'an',
   '全': 'quan',
   '审': 'shen',
-  '查': 'cha',
   '质': 'zhi',
   '量': 'liang',
   '前': 'qian',
@@ -136,35 +148,39 @@ function parseArgs(argv) {
   return { command, options };
 }
 
-function statePath(root) {
-  return path.join(root, STATE_DIR, STATE_FILE);
-}
-
 function normalizeRoot(options) {
   return path.resolve(String(options.root || process.cwd()));
 }
 
+function statePath(root) {
+  return path.join(root, STATE_DIR, STATE_FILE);
+}
+
+function legacyStatePath(root) {
+  return path.join(root, LEGACY_STATE_DIR, LEGACY_STATE_FILE);
+}
+
 function artifactPath(kind, requirementName) {
   switch (kind) {
+    case 'research':
+      return `${OUTPUT_DIR}/${requirementName}-research.md`;
     case 'prd':
-      return `spec-dev/prd/${requirementName}-prd.md`;
-    case 'tech':
-      return `spec-dev/tech/${requirementName}-tech.md`;
+      return `${OUTPUT_DIR}/${requirementName}-prd.md`;
+    case 'architecture':
+      return `${OUTPUT_DIR}/${requirementName}-architecture.md`;
     case 'uiux':
-      return `spec-dev/uiux/${requirementName}-uiux.md`;
-    case 'spec':
-      return `spec-dev/spec/${requirementName}-tasks.md`;
+      return `${OUTPUT_DIR}/${requirementName}-uiux.md`;
+    case 'proposal':
+      return `${CHANGES_DIR}/${requirementName}/proposal.md`;
+    case 'tasks':
+      return `${CHANGES_DIR}/${requirementName}/tasks.md`;
     case 'quality':
-      return `spec-dev/quality/${requirementName}-quality-report.md`;
-    case 'archive':
-      return `spec-dev/archive/<YYYY-MM-DD>-${requirementName}.md`;
+      return `${OUTPUT_DIR}/${requirementName}-quality-report.md`;
+    case 'delivery':
+      return `${OUTPUT_DIR}/<YYYY-MM-DD>-${requirementName}-delivery.md`;
     default:
       return null;
   }
-}
-
-function artifactOrDefault(state, kind) {
-  return state.artifacts?.[kind] || artifactPath(kind, state.requirement_name);
 }
 
 function requiredArtifact(state, kind) {
@@ -178,93 +194,143 @@ function requiredArtifact(state, kind) {
   return artifact;
 }
 
-function phasePayload(state) {
+async function optionalKnowledgeReads(root) {
+  const reads = [];
+  try {
+    await access(path.join(root, 'knowledge'));
+    reads.push('knowledge/');
+  } catch {
+    // Optional.
+  }
+
+  const cacheDir = path.join(root, OUTPUT_DIR, 'knowledge-cache');
+  try {
+    const entries = await readdir(cacheDir);
+    for (const entry of entries.sort()) {
+      if (entry.endsWith('-knowledge-bundle.json')) {
+        reads.push(`${OUTPUT_DIR}/knowledge-cache/${entry}`);
+      }
+    }
+  } catch {
+    // Optional.
+  }
+
+  return reads;
+}
+
+async function phasePayload(root, state) {
   const phase = state.phase;
   const currentGate = state.current_gate || (phase === 'docs_confirm' || phase === 'preview_confirm' ? phase : null);
   let requiredReads = [];
-  let expectedOutput = null;
+  let expectedOutputs = [];
   let message = '';
 
   switch (phase) {
+    case 'baseline':
+      message = '轻量 baseline：扫描当前项目结构、已有约束和差量范围；完成后调用 advance --completed baseline 进入 research。';
+      break;
     case 'research':
-      requiredReads = ['agents/researcher.md'];
-      message = '读取 researcher 指令，执行本地代码分析和必要联网调研；调研结论沉淀到后续 PRD/Tech。';
+      requiredReads = ['agents/researcher.md', ...(await optionalKnowledgeReads(root))];
+      expectedOutputs = [artifactPath('research', state.requirement_name)];
+      message = '读取 researcher 指令，执行本地知识发现、代码分析和必要联网调研；写入 output/*-research.md 后调用 advance --completed research 并记录 artifact。';
       break;
-    case 'prd':
-      requiredReads = ['agents/prd-writer.md', 'references/prd-template.md'];
-      expectedOutput = artifactPath('prd', state.requirement_name);
-      message = '读取 PRD 专家指令和模板，生成 PRD 后调用 advance --completed prd 并记录 artifact。';
-      break;
-    case 'tech':
-      requiredReads = ['agents/tech-writer.md', 'references/tech-template.md'];
-      expectedOutput = artifactPath('tech', state.requirement_name);
-      message = '读取技术方案专家指令和模板，生成 Tech 后调用 advance --completed tech 并记录 artifact。';
-      break;
-    case 'uiux':
+    case 'docs':
       requiredReads = [
+        'agents/prd-writer.md',
+        'agents/architecture-writer.md',
         'agents/ui-designer.md',
+        'references/prd-template.md',
+        'references/architecture-template.md',
         'references/uiux-template.md',
-        requiredArtifact(state, 'prd'),
-        requiredArtifact(state, 'tech'),
+        'references/uiux-pro-max-adapter.md',
+        requiredArtifact(state, 'research'),
       ];
-      expectedOutput = artifactPath('uiux', state.requirement_name);
-      message = '读取 UI/UX 设计专家指令和模板，基于 PRD 和 Tech 生成 UI/UX 设计文档后调用 advance --completed uiux 并进入 docs_confirm 门禁。';
+      expectedOutputs = [
+        artifactPath('prd', state.requirement_name),
+        artifactPath('architecture', state.requirement_name),
+        artifactPath('uiux', state.requirement_name),
+      ];
+      message = '三文档阶段：基于 research 一次性生成 PRD、Architecture、UIUX 到 output/，完成后调用 advance --completed docs 并记录 prd、architecture、uiux artifacts。';
       break;
     case 'docs_confirm':
       requiredReads = [
         requiredArtifact(state, 'prd'),
-        requiredArtifact(state, 'tech'),
+        requiredArtifact(state, 'architecture'),
         requiredArtifact(state, 'uiux'),
       ];
-      message = '硬门禁：向用户展示 PRD、Tech 和 UIUX 摘要；确认后调用 gate --confirm docs_confirm，修改意见则更新文档并停留门禁。';
+      message = '硬门禁：向用户展示 PRD、Architecture 和 UIUX 摘要；确认后调用 gate --confirm docs_confirm，修改意见则更新文档并停留门禁。';
       break;
     case 'spec':
       requiredReads = [
         'agents/spec-generator.md',
         'references/spec-template.md',
         requiredArtifact(state, 'prd'),
-        requiredArtifact(state, 'tech'),
+        requiredArtifact(state, 'architecture'),
         requiredArtifact(state, 'uiux'),
       ];
-      expectedOutput = artifactPath('spec', state.requirement_name);
-      message = '读取任务拆分专家指令、模板和已确认文档，生成 tasks 后调用 advance --completed spec 并记录 artifact。';
+      expectedOutputs = [
+        artifactPath('proposal', state.requirement_name),
+        artifactPath('tasks', state.requirement_name),
+      ];
+      message = '读取任务拆分专家指令、模板和已确认文档，生成 .spec-dev/changes/*/proposal.md 与 tasks.md 后调用 advance --completed spec 并记录 artifacts。';
+      break;
+    case 'pre_code':
+      requiredReads = [
+        `${STATE_DIR}/${PRE_CODE_CHECKLIST_FILE}`,
+        requiredArtifact(state, 'prd'),
+        requiredArtifact(state, 'architecture'),
+        requiredArtifact(state, 'uiux'),
+        requiredArtifact(state, 'tasks'),
+      ];
+      message = '编码前门禁：逐项完成 .spec-dev/PRE_CODE_CHECKLIST.md；全部标记 [x] 后调用 advance --completed pre_code 进入 frontend。';
       break;
     case 'frontend':
-      requiredReads = state.mode === 'patch'
-        ? []
-        : [requiredArtifact(state, 'spec')];
-      message = state.mode === 'patch'
-        ? 'Patch 模式：AI 自行管理任务清单，不依赖 spec 文件。直接开始前端开发，完成后调用 advance --completed frontend 进入 preview_confirm。'
-        : '按任务清单中前端相关任务（标记 [FE] 或前端）顺序实现，每个完成后标记 [x] 并运行前端构建验证；全部完成后调用 advance --completed frontend 进入 preview_confirm。';
+      requiredReads = [
+        requiredArtifact(state, 'tasks'),
+        requiredArtifact(state, 'uiux'),
+        `${STATE_DIR}/${PRE_CODE_CHECKLIST_FILE}`,
+      ];
+      message = '按 tasks 中前端相关任务顺序实现，每个完成后标记 [x] 并运行前端构建验证；全部完成后调用 advance --completed frontend 进入 preview_confirm。';
       break;
     case 'preview_confirm':
-      requiredReads = state.mode === 'patch'
-        ? (state.artifacts?.uiux ? [state.artifacts.uiux] : [])
-        : [requiredArtifact(state, 'spec'), requiredArtifact(state, 'uiux')];
+      requiredReads = [
+        requiredArtifact(state, 'tasks'),
+        requiredArtifact(state, 'uiux'),
+      ];
       message = '硬门禁：展示前端截图/运行结果和 UIUX 设计对比，汇报完成的前端任务和变更文件；确认后调用 gate --confirm preview_confirm，修改意见则继续 frontend。';
       break;
     case 'backend':
-      requiredReads = state.mode === 'patch'
-        ? []
-        : [requiredArtifact(state, 'spec')];
-      message = state.mode === 'patch'
-        ? 'Patch 模式：AI 自行管理后端任务清单。完成后调用 advance --completed backend 进入 quality。'
-        : '按任务清单中后端相关任务（标记 [BE] 或后端）顺序实现，每个完成后标记 [x] 并运行后端构建验证；全部完成后调用 advance --completed backend 进入 quality。';
+      requiredReads = [
+        requiredArtifact(state, 'tasks'),
+        requiredArtifact(state, 'architecture'),
+      ];
+      message = '按 tasks 中后端相关任务顺序实现，每个完成后标记 [x] 并运行后端构建验证；全部完成后调用 advance --completed backend 进入 quality。';
       break;
     case 'quality':
       requiredReads = [
         'agents/quality-reviewer.md',
         'agents/security-reviewer.md',
         'references/quality-checklist.md',
-        requiredArtifact(state, 'spec'),
+        requiredArtifact(state, 'tasks'),
+        requiredArtifact(state, 'prd'),
+        requiredArtifact(state, 'architecture'),
+        requiredArtifact(state, 'uiux'),
       ];
-      expectedOutput = artifactPath('quality', state.requirement_name);
-      message = '自动化质量门禁：依次执行安全审查、代码审查、构建验证、覆盖率检查；汇总为质量报告后调用 advance --completed quality --artifact quality=<path>。CRITICAL 问题须修复后重新执行 quality。';
+      expectedOutputs = [artifactPath('quality', state.requirement_name)];
+      message = '自动化质量门禁：执行安全审查、代码审查、构建验证、覆盖率检查与 UI 一致性检查；汇总为 output/*-quality-report.md 后调用 advance --completed quality。';
       break;
-    case 'archive':
-      requiredReads = ['references/archive-template.md'];
-      expectedOutput = artifactPath('archive', state.requirement_name);
-      message = '调用 archive 命令生成归档并推进到 done。';
+    case 'delivery':
+      requiredReads = [
+        'references/delivery-template.md',
+        requiredArtifact(state, 'research'),
+        requiredArtifact(state, 'prd'),
+        requiredArtifact(state, 'architecture'),
+        requiredArtifact(state, 'uiux'),
+        requiredArtifact(state, 'tasks'),
+        requiredArtifact(state, 'quality'),
+      ];
+      expectedOutputs = [artifactPath('delivery', state.requirement_name)];
+      message = '交付阶段：调用 deliver 命令生成 output/{YYYY-MM-DD}-{name}-delivery.md 并推进到 done。archive 是兼容别名。';
       break;
     case 'done':
       message = 'Spec-Dev 流程已完成。';
@@ -279,22 +345,45 @@ function phasePayload(state) {
     mode: state.mode || 'new',
     current_gate: currentGate,
     required_reads: requiredReads,
-    expected_output: expectedOutput,
+    expected_output: expectedOutputs.length === 1 ? expectedOutputs[0] : null,
+    expected_outputs: expectedOutputs,
     requirement: state.requirement,
     requirement_name: state.requirement_name,
     artifacts: state.artifacts,
-    quality: state.quality || { security_passed: false, code_review_passed: false, build_passed: false, coverage_passed: false },
+    quality: state.quality || defaultQualityState(),
     message,
   };
 }
 
-async function ensureProjectDirs(root) {
-  await mkdir(path.join(root, 'spec-dev', 'prd'), { recursive: true });
-  await mkdir(path.join(root, 'spec-dev', 'tech'), { recursive: true });
-  await mkdir(path.join(root, 'spec-dev', 'uiux'), { recursive: true });
-  await mkdir(path.join(root, 'spec-dev', 'spec'), { recursive: true });
-  await mkdir(path.join(root, 'spec-dev', 'quality'), { recursive: true });
-  await mkdir(path.join(root, 'spec-dev', 'archive'), { recursive: true });
+async function ensureProjectDirs(root, state = null) {
+  await mkdir(path.join(root, STATE_DIR), { recursive: true });
+  await mkdir(path.join(root, CHANGES_DIR), { recursive: true });
+  await mkdir(path.join(root, OUTPUT_DIR), { recursive: true });
+  if (state?.requirement_name) {
+    await mkdir(path.join(root, CHANGES_DIR, state.requirement_name), { recursive: true });
+  }
+}
+
+function defaultArtifacts() {
+  return {
+    research: null,
+    prd: null,
+    architecture: null,
+    uiux: null,
+    proposal: null,
+    tasks: null,
+    quality: null,
+    delivery: null,
+  };
+}
+
+function defaultQualityState() {
+  return {
+    security_passed: false,
+    code_review_passed: false,
+    build_passed: false,
+    coverage_passed: false,
+  };
 }
 
 function slugifyRequirement(requirement) {
@@ -324,35 +413,140 @@ function slugifyRequirement(requirement) {
 }
 
 async function readState(root) {
-  const file = statePath(root);
-  let raw;
   try {
-    raw = await readFile(file, 'utf8');
+    return normalizeState(JSON.parse(await readFile(statePath(root), 'utf8')));
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      if (error instanceof SyntaxError) {
+        throw appError('STATE_INVALID_JSON', 'State file is not valid JSON.');
+      }
+      throw error;
+    }
+  }
+
+  let legacyRaw;
+  try {
+    legacyRaw = await readFile(legacyStatePath(root), 'utf8');
   } catch (error) {
     if (error.code === 'ENOENT') {
-      throw appError('STATE_NOT_FOUND', `State file not found: ${path.join('spec-dev', '.state.json')}`);
+      throw appError('STATE_NOT_FOUND', `State file not found: ${path.join(STATE_DIR, STATE_FILE)}`);
     }
     throw error;
   }
 
+  let legacyState;
   try {
-    const state = JSON.parse(raw);
-    if (!state.schema_version || state.schema_version < SCHEMA_VERSION) {
-      state.schema_version = SCHEMA_VERSION;
-    }
-    return state;
+    legacyState = JSON.parse(legacyRaw);
   } catch {
-    throw appError('STATE_INVALID_JSON', 'State file is not valid JSON.');
+    throw appError('STATE_INVALID_JSON', 'Legacy state file is not valid JSON.');
   }
+
+  const migrated = migrateLegacyState(legacyState);
+  migrated.migrated_from = path.join(LEGACY_STATE_DIR, LEGACY_STATE_FILE);
+  migrated.migrated_at = new Date().toISOString();
+  await writeState(root, migrated);
+  return migrated;
 }
 
 async function writeState(root, state) {
-  await ensureProjectDirs(root);
-  await writeFile(statePath(root), `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  const normalized = normalizeState(state);
+  await ensureProjectDirs(root, normalized);
+  await writeFile(statePath(root), `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
+}
+
+function normalizeState(state) {
+  const artifacts = { ...defaultArtifacts(), ...(state.artifacts || {}) };
+  if (!artifacts.architecture && state.artifacts?.tech) {
+    artifacts.architecture = state.artifacts.tech;
+  }
+  if (!artifacts.tasks && state.artifacts?.spec) {
+    artifacts.tasks = state.artifacts.spec;
+  }
+  if (!artifacts.delivery && state.artifacts?.archive) {
+    artifacts.delivery = state.artifacts.archive;
+  }
+
+  const phase = normalizePhase(state.phase || 'research');
+  const currentGate = normalizeGate(state.current_gate || (phase === 'docs_confirm' || phase === 'preview_confirm' ? phase : null));
+
+  return {
+    schema_version: SCHEMA_VERSION,
+    mode: VALID_MODES.has(state.mode) ? state.mode : 'new',
+    phase,
+    requirement: state.requirement || '',
+    requirement_name: state.requirement_name || slugifyRequirement(state.requirement || 'requirement'),
+    created_at: state.created_at || new Date().toISOString(),
+    phases_completed: normalizeCompletedPhases(state.phases_completed || []),
+    current_gate: currentGate,
+    artifacts,
+    quality: { ...defaultQualityState(), ...(state.quality || {}) },
+  };
+}
+
+function migrateLegacyState(state) {
+  const legacyArtifacts = state.artifacts || {};
+  const requirementName = state.requirement_name || slugifyRequirement(state.requirement || 'requirement');
+  return normalizeState({
+    ...state,
+    phase: normalizeLegacyPhase(state.phase || 'research'),
+    current_gate: normalizeGate(state.current_gate || null),
+    phases_completed: (state.phases_completed || []).map(normalizeLegacyPhase),
+    artifacts: {
+      research: legacyArtifacts.research || artifactPath('research', requirementName),
+      prd: legacyArtifacts.prd || null,
+      architecture: legacyArtifacts.architecture || legacyArtifacts.tech || null,
+      uiux: legacyArtifacts.uiux || null,
+      proposal: legacyArtifacts.proposal || null,
+      tasks: legacyArtifacts.tasks || legacyArtifacts.spec || null,
+      quality: legacyArtifacts.quality || null,
+      delivery: legacyArtifacts.delivery || legacyArtifacts.archive || null,
+    },
+  });
+}
+
+function normalizeLegacyPhase(phase) {
+  switch (phase) {
+    case 'prd':
+    case 'tech':
+    case 'uiux':
+      return 'docs';
+    case 'archive':
+      return 'delivery';
+    case 'dev_confirm':
+      return 'preview_confirm';
+    default:
+      return normalizePhase(phase);
+  }
+}
+
+function normalizePhase(phase) {
+  const normalized = String(phase || '').trim();
+  return PHASES.includes(normalized) ? normalized : 'research';
+}
+
+function normalizeGate(gate) {
+  if (gate === 'dev_confirm') {
+    return 'preview_confirm';
+  }
+  if (gate === 'docs_confirm' || gate === 'preview_confirm') {
+    return gate;
+  }
+  return null;
+}
+
+function normalizeCompletedPhases(phases) {
+  const normalized = [];
+  for (const phase of phases) {
+    const item = normalizeLegacyPhase(phase);
+    if (PHASES.includes(item) && !normalized.includes(item)) {
+      normalized.push(item);
+    }
+  }
+  return normalized;
 }
 
 function createState(requirement, mode = 'new') {
-  const initialPhase = mode === 'new' ? 'research' : mode === 'evolve' ? 'spec' : 'frontend';
+  const initialPhase = mode === 'new' ? 'research' : 'baseline';
 
   return {
     schema_version: SCHEMA_VERSION,
@@ -363,20 +557,8 @@ function createState(requirement, mode = 'new') {
     created_at: new Date().toISOString(),
     phases_completed: [],
     current_gate: null,
-    artifacts: {
-      prd: null,
-      tech: null,
-      uiux: null,
-      spec: null,
-      quality: null,
-      archive: null,
-    },
-    quality: {
-      security_passed: false,
-      code_review_passed: false,
-      build_passed: false,
-      coverage_passed: false,
-    },
+    artifacts: defaultArtifacts(),
+    quality: defaultQualityState(),
   };
 }
 
@@ -423,46 +605,20 @@ async function commandInit(options) {
   }
 
   const state = createState(requirement, mode);
-
-  // evolve mode: validate prerequisite artifacts exist
-  if (mode === 'evolve') {
-    const missing = [];
-    const rn = state.requirement_name;
-    const prereqs = [
-      { kind: 'prd', file: path.join(root, `spec-dev/prd/${rn}-prd.md`) },
-      { kind: 'tech', file: path.join(root, `spec-dev/tech/${rn}-tech.md`) },
-      { kind: 'uiux', file: path.join(root, `spec-dev/uiux/${rn}-uiux.md`) },
-    ];
-    for (const { kind, file } of prereqs) {
-      try {
-        await access(file);
-        state.artifacts[kind] = `spec-dev/${kind}/${rn}-${kind === 'spec' ? 'tasks' : kind === 'quality' ? 'quality-report' : kind === 'uiux' ? 'uiux' : kind}.md`;
-      } catch (error) {
-        if (error.code === 'ENOENT') {
-          missing.push(kind);
-        } else {
-          throw error;
-        }
-      }
-    }
-    if (missing.length > 0) {
-      throw appError('MISSING_PREREQUISITE_ARTIFACTS', `Evolve mode requires existing PRD, Tech, and UIUX artifacts. Missing: ${missing.join(', ')}.`, { missing });
-    }
-  }
-
   await writeState(root, state);
-  return phasePayload(state);
+  await writeSessionBrief(root, state);
+  return phasePayload(root, state);
 }
 
 async function commandNext(options) {
   const root = normalizeRoot(options);
   const state = await readState(root);
-  return phasePayload(state);
+  return phasePayload(root, state);
 }
 
 async function commandAdvance(options) {
   const root = normalizeRoot(options);
-  const completed = String(options.completed || '');
+  const completed = normalizeLegacyPhase(String(options.completed || ''));
   const state = await readState(root);
 
   if (!PHASES.includes(completed)) {
@@ -474,17 +630,22 @@ async function commandAdvance(options) {
       completed,
     });
   }
-  if (completed === 'archive') {
-    throw appError('ARCHIVE_REQUIRES_COMMAND', 'Use the archive command to generate the archive artifact.');
+  if (completed === 'delivery') {
+    throw appError('DELIVERY_REQUIRES_COMMAND', 'Use the deliver command to generate the delivery artifact.');
+  }
+
+  if (completed === 'pre_code') {
+    await assertPreCodeChecklistComplete(root);
   }
 
   const artifacts = parseArtifacts(options.artifact);
-  const requiredKind = artifactKindForCompletedPhase(completed);
-  if (requiredKind && !artifacts[requiredKind]) {
-    throw appError('ARTIFACT_REQUIRED', `Completing ${completed} requires --artifact ${requiredKind}=<path>.`, {
-      phase: completed,
-      kind: requiredKind,
-    });
+  for (const requiredKind of artifactKindsForCompletedPhase(completed)) {
+    if (!artifacts[requiredKind]) {
+      throw appError('ARTIFACT_REQUIRED', `Completing ${completed} requires --artifact ${requiredKind}=<path>.`, {
+        phase: completed,
+        kind: requiredKind,
+      });
+    }
   }
 
   for (const [kind, artifact] of Object.entries(artifacts)) {
@@ -498,15 +659,27 @@ async function commandAdvance(options) {
   }
 
   state.current_gate = (state.phase === 'docs_confirm' || state.phase === 'preview_confirm') ? state.phase : null;
+  if (state.phase === 'pre_code') {
+    await writePreCodeChecklist(root, state);
+  }
+
   await writeState(root, state);
-  return phasePayload(state);
+  return phasePayload(root, state);
 }
 
-function artifactKindForCompletedPhase(phase) {
-  if (phase === 'prd' || phase === 'tech' || phase === 'uiux' || phase === 'spec' || phase === 'quality') {
-    return phase;
+function artifactKindsForCompletedPhase(phase) {
+  switch (phase) {
+    case 'research':
+      return ['research'];
+    case 'docs':
+      return ['prd', 'architecture', 'uiux'];
+    case 'spec':
+      return ['proposal', 'tasks'];
+    case 'quality':
+      return ['quality'];
+    default:
+      return [];
   }
-  return null;
 }
 
 async function commandGate(options) {
@@ -514,10 +687,8 @@ async function commandGate(options) {
   const confirm = String(options.confirm || '');
   const state = await readState(root);
 
-  // Support docs_confirm, preview_confirm, and dev_confirm (backward compat)
   if (confirm === 'dev_confirm') {
-    // Backward compat: dev_confirm maps to preview_confirm behavior
-    if (state.phase !== 'dev_confirm' && state.phase !== 'preview_confirm') {
+    if (state.phase !== 'preview_confirm') {
       throw appError('GATE_MISMATCH', `Cannot confirm dev_confirm while current gate is ${state.current_gate || 'none'}.`, {
         phase: state.phase,
         current_gate: state.current_gate,
@@ -528,7 +699,7 @@ async function commandGate(options) {
     state.phase = 'backend';
     state.current_gate = null;
     await writeState(root, state);
-    return phasePayload(state);
+    return phasePayload(root, state);
   }
 
   if (confirm !== 'docs_confirm' && confirm !== 'preview_confirm') {
@@ -546,60 +717,114 @@ async function commandGate(options) {
   state.phase = NEXT_PHASE[confirm];
   state.current_gate = null;
   await writeState(root, state);
-  return phasePayload(state);
+  return phasePayload(root, state);
 }
 
-async function commandArchive(options) {
+async function commandDeliver(options) {
   const root = normalizeRoot(options);
   const state = await readState(root);
-  if (state.phase !== 'archive') {
-    throw appError('PHASE_MISMATCH', `Cannot archive while current phase is ${state.phase}.`, {
+  if (state.phase !== 'delivery') {
+    throw appError('PHASE_MISMATCH', `Cannot deliver while current phase is ${state.phase}.`, {
       current: state.phase,
-      expected: 'archive',
+      expected: 'delivery',
     });
   }
 
-  const date = resolveArchiveDate(process.env.SPEC_DEV_DATE);
-  const prdPath = requiredArtifact(state, 'prd');
-  const techPath = requiredArtifact(state, 'tech');
-  const specPath = requiredArtifact(state, 'spec');
-  const uiuxPath = state.artifacts?.uiux || null;
-  const qualityPath = state.artifacts?.quality || null;
-  await assertArtifactsExist(root, [prdPath, techPath, specPath]);
+  const date = resolveDeliveryDate(process.env.SPEC_DEV_DATE);
+  const required = [
+    requiredArtifact(state, 'research'),
+    requiredArtifact(state, 'prd'),
+    requiredArtifact(state, 'architecture'),
+    requiredArtifact(state, 'uiux'),
+    requiredArtifact(state, 'tasks'),
+    requiredArtifact(state, 'quality'),
+  ];
+  await assertArtifactsExist(root, required);
 
-  const archivePath = `spec-dev/archive/${date}-${state.requirement_name}.md`;
-  const archiveFile = path.join(root, archivePath);
-  await mkdir(path.dirname(archiveFile), { recursive: true });
+  const deliveryPath = `${OUTPUT_DIR}/${date}-${state.requirement_name}-delivery.md`;
+  const deliveryFile = path.join(root, deliveryPath);
+  await mkdir(path.dirname(deliveryFile), { recursive: true });
 
-  const taskCounts = await countTasks(path.join(root, specPath));
-  const body = await renderArchiveTemplate(root, state, {
-    archivePath,
+  const taskCounts = await countTasks(path.join(root, state.artifacts.tasks));
+  const body = await renderDeliveryTemplate(root, state, {
     date,
-    prdPath,
-    techPath,
-    uiuxPath,
-    qualityPath,
-    specPath,
+    deliveryPath,
     taskCounts,
   });
 
-  await writeFile(archiveFile, body, 'utf8');
-  state.artifacts.archive = archivePath;
-  addCompleted(state, 'archive');
+  await writeFile(deliveryFile, body, 'utf8');
+  state.artifacts.delivery = deliveryPath;
+  addCompleted(state, 'delivery');
   state.phase = 'done';
   state.current_gate = null;
   await writeState(root, state);
 
   return {
-    ...phasePayload(state),
-    archive_path: archivePath,
+    ...(await phasePayload(root, state)),
+    delivery_path: deliveryPath,
+    archive_path: deliveryPath,
   };
 }
 
-function resolveArchiveDate(overrideDate) {
+async function commandValidate(options) {
+  const root = normalizeRoot(options);
+  const state = await readState(root);
+  if (!PHASES.includes(state.phase)) {
+    throw appError('UNKNOWN_PHASE', `Unknown phase: ${state.phase}`, { phase: state.phase });
+  }
+  if (state.phase === 'done') {
+    return { valid: true, phase: state.phase, mode: state.mode || 'new', current_gate: state.current_gate || null };
+  }
+
+  await assertArtifactsExist(root, artifactsRequiredForPhase(state));
+
+  return { valid: true, phase: state.phase, mode: state.mode || 'new', current_gate: state.current_gate || null };
+}
+
+function artifactsRequiredForPhase(state) {
+  switch (state.phase) {
+    case 'docs':
+      return [requiredArtifact(state, 'research')];
+    case 'docs_confirm':
+    case 'spec':
+      return [requiredArtifact(state, 'prd'), requiredArtifact(state, 'architecture'), requiredArtifact(state, 'uiux')];
+    case 'pre_code':
+      return [
+        requiredArtifact(state, 'prd'),
+        requiredArtifact(state, 'architecture'),
+        requiredArtifact(state, 'uiux'),
+        requiredArtifact(state, 'tasks'),
+      ];
+    case 'frontend':
+    case 'preview_confirm':
+      return [requiredArtifact(state, 'tasks'), requiredArtifact(state, 'uiux')];
+    case 'backend':
+      return [requiredArtifact(state, 'tasks'), requiredArtifact(state, 'architecture')];
+    case 'quality':
+      return [
+        requiredArtifact(state, 'tasks'),
+        requiredArtifact(state, 'prd'),
+        requiredArtifact(state, 'architecture'),
+        requiredArtifact(state, 'uiux'),
+      ];
+    case 'delivery':
+      return [
+        requiredArtifact(state, 'research'),
+        requiredArtifact(state, 'prd'),
+        requiredArtifact(state, 'architecture'),
+        requiredArtifact(state, 'uiux'),
+        requiredArtifact(state, 'tasks'),
+        requiredArtifact(state, 'quality'),
+      ];
+    default:
+      return [];
+  }
+}
+
+function resolveDeliveryDate(overrideDate) {
   const date = overrideDate || new Date().toISOString().slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    throw appError('INVALID_ARCHIVE_DATE', 'Archive date must use YYYY-MM-DD format.', { date });
+    throw appError('INVALID_DELIVERY_DATE', 'Delivery date must use YYYY-MM-DD format.', { date });
   }
   return date;
 }
@@ -623,53 +848,140 @@ async function assertArtifactsExist(root, artifacts) {
   }
 }
 
-async function renderArchiveTemplate(root, state, archive) {
-  const templatePath = path.join(SKILL_ROOT, 'references', 'archive-template.md');
-  const template = await readFile(templatePath, 'utf8');
-  const startedAt = String(state.created_at || '').slice(0, 10) || archive.date;
-  const mode = state.mode || 'new';
-  const isPatch = mode === 'patch';
+async function writeSessionBrief(root, state) {
+  const file = path.join(root, STATE_DIR, SESSION_BRIEF_FILE);
+  const body = [
+    '# SESSION BRIEF',
+    '',
+    '## Session Title',
+    '',
+    `${state.requirement_name} -- spec-dev ${state.mode} flow`,
+    '',
+    '## Current State',
+    '',
+    `Phase: ${state.phase}`,
+    `Mode: ${state.mode}`,
+    '',
+    '## Task Specification',
+    '',
+    state.requirement,
+    '',
+    '## Files and Functions',
+    '',
+    '_(empty)_',
+    '',
+    '## Workflow',
+    '',
+    'research -> docs -> docs_confirm -> spec -> pre_code -> frontend -> preview_confirm -> backend -> quality -> delivery',
+    '',
+    '## Errors & Corrections',
+    '',
+    '_(empty)_',
+    '',
+    '## Codebase Documentation',
+    '',
+    '_(empty)_',
+    '',
+    '## Learnings',
+    '',
+    '_(empty)_',
+    '',
+    '## Key Results',
+    '',
+    '_(empty)_',
+    '',
+    '## Worklog',
+    '',
+    `- Created at ${state.created_at}`,
+    '',
+  ].join('\n');
+  await writeFile(file, body, 'utf8');
+}
 
-  let body = template
+async function writePreCodeChecklist(root, state) {
+  const file = path.join(root, STATE_DIR, PRE_CODE_CHECKLIST_FILE);
+  const body = [
+    '# Pre-Code Checklist',
+    '',
+    '> Complete every item before writing implementation code. Mark each item with [x].',
+    '',
+    '## Architecture Confirmation',
+    '',
+    `- [ ] Read \`${state.artifacts.architecture}\` and confirm API routes / data model`,
+    `- [ ] Read \`${state.artifacts.prd}\` and confirm functional scope`,
+    '',
+    '## UI/UX Confirmation',
+    '',
+    `- [ ] Read \`${state.artifacts.uiux}\` and confirm icon library`,
+    '- [ ] Declare the component library being used',
+    '- [ ] Confirm typography system and design tokens are defined',
+    '',
+    '## Tech Stack Verification',
+    '',
+    '- [ ] Read dependency manifests and record exact framework versions',
+    '- [ ] Check official docs for any uncertain framework API before coding',
+    '- [ ] Verify framework config files match the architecture document',
+    '',
+    '## Spec Alignment',
+    '',
+    `- [ ] Read \`${state.artifacts.tasks}\` for the current task list`,
+    '- [ ] Confirm implementation order: frontend first, then preview gate, then backend',
+    '',
+  ].join('\n');
+  await writeFile(file, body, 'utf8');
+}
+
+async function assertPreCodeChecklistComplete(root) {
+  const file = path.join(root, STATE_DIR, PRE_CODE_CHECKLIST_FILE);
+  let text;
+  try {
+    text = await readFile(file, 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      throw appError('PRE_CODE_CHECKLIST_MISSING', `${path.join(STATE_DIR, PRE_CODE_CHECKLIST_FILE)} does not exist.`);
+    }
+    throw error;
+  }
+
+  const incomplete = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('- [ ]'));
+
+  if (incomplete.length > 0) {
+    throw appError('PRE_CODE_CHECKLIST_INCOMPLETE', 'Pre-code checklist has incomplete items.', { incomplete });
+  }
+}
+
+async function renderDeliveryTemplate(root, state, delivery) {
+  const templatePath = path.join(SKILL_ROOT, 'references', 'delivery-template.md');
+  const template = await readFile(templatePath, 'utf8');
+  const startedAt = String(state.created_at || '').slice(0, 10) || delivery.date;
+  const docs = {
+    research: requiredArtifact(state, 'research'),
+    prd: requiredArtifact(state, 'prd'),
+    architecture: requiredArtifact(state, 'architecture'),
+    uiux: requiredArtifact(state, 'uiux'),
+    tasks: requiredArtifact(state, 'tasks'),
+    quality: requiredArtifact(state, 'quality'),
+  };
+
+  return template
     .replaceAll('{需求名称}', state.requirement_name)
-    .replaceAll('{YYYY-MM-DD}', archive.date)
+    .replaceAll('{YYYY-MM-DD}', delivery.date)
     .replaceAll('{项目名称}', path.basename(root))
     .replaceAll('{开始日期}', startedAt)
-    .replaceAll('{归档日期}', archive.date)
-    .replaceAll('{从 PRD 中提取 3-5 条核心功能点}', isPatch ? '（Patch 模式 — 无 PRD）' : `详见 ${archive.prdPath}`)
-    .replaceAll('{从技术方案中提取核心设计决策}', isPatch ? '（Patch 模式 — 无 Tech）' : `详见 ${archive.techPath}`);
-
-  // Build change file list
-  const changeLines = [
-    `| ${archive.prdPath} | ${isPatch ? 'N/A' : '新增/修改'} | PRD 产物 |`,
-    `| ${archive.techPath} | ${isPatch ? 'N/A' : '新增/修改'} | 技术方案产物 |`,
-  ];
-  if (archive.uiuxPath && !isPatch) {
-    changeLines.push(`| ${archive.uiuxPath} | 新增/修改 | UI/UX 设计产物 |`);
-  }
-  changeLines.push(`| ${archive.specPath} | ${isPatch ? 'N/A' : '新增/修改'} | 任务清单产物，任务完成: ${archive.taskCounts.done}/${archive.taskCounts.total} |`);
-  if (archive.qualityPath) {
-    changeLines.push(`| ${archive.qualityPath} | 新增 | 质量审查报告 |`);
-  }
-  changeLines.push(`| ${archive.archivePath} | 新增 | 本归档文件 |`);
-
-  body = body.replaceAll(
-    '| {文件路径} | 新增/修改/删除 | {简要说明} |',
-    changeLines.join('\n'),
-  );
-
-  body = body.replaceAll('{记录开发过程中的重要技术决策和取舍}', isPatch
-    ? '- Patch 模式：快速修复/小改动，无详细决策记录。'
-    : '- 以 PRD、技术方案、UIUX 设计、任务清单和质量报告为准；详细内容见对应产物文件。');
-
-  body = body.replaceAll(`spec-dev/prd/{requirement_name}-prd.md`, archive.prdPath);
-  body = body.replaceAll(`spec-dev/tech/{requirement_name}-tech.md`, archive.techPath);
-  body = body.replaceAll(`spec-dev/spec/{requirement_name}-tasks.md`, archive.specPath);
-
-  body += `\n## 任务完成情况\n\n任务完成: ${archive.taskCounts.done}/${archive.taskCounts.total}\n`;
-  body += `\n## 工作模式\n\n${mode}\n`;
-
-  return body;
+    .replaceAll('{交付日期}', delivery.date)
+    .replaceAll('{工作模式}', state.mode || 'new')
+    .replaceAll('{research_path}', docs.research)
+    .replaceAll('{prd_path}', docs.prd)
+    .replaceAll('{architecture_path}', docs.architecture)
+    .replaceAll('{uiux_path}', docs.uiux)
+    .replaceAll('{tasks_path}', docs.tasks)
+    .replaceAll('{quality_path}', docs.quality)
+    .replaceAll('{delivery_path}', delivery.deliveryPath)
+    .replaceAll('{task_done}', String(delivery.taskCounts.done))
+    .replaceAll('{task_total}', String(delivery.taskCounts.total));
 }
 
 async function countTasks(specFile) {
@@ -689,40 +1001,6 @@ async function countTasks(specFile) {
     total: lines.filter((line) => taskLine.test(line)).length,
     done: lines.filter((line) => doneLine.test(line)).length,
   };
-}
-
-async function commandValidate(options) {
-  const root = normalizeRoot(options);
-  const state = await readState(root);
-  if (!PHASES.includes(state.phase)) {
-    throw appError('UNKNOWN_PHASE', `Unknown phase: ${state.phase}`, { phase: state.phase });
-  }
-  if (state.phase === 'done') {
-    return { valid: true, phase: state.phase, mode: state.mode || 'new', current_gate: state.current_gate || null };
-  }
-
-  await assertArtifactsExist(root, artifactsRequiredForPhase(state));
-
-  return { valid: true, phase: state.phase, mode: state.mode || 'new', current_gate: state.current_gate || null };
-}
-
-function artifactsRequiredForPhase(state) {
-  switch (state.phase) {
-    case 'docs_confirm':
-    case 'spec':
-      return [requiredArtifact(state, 'prd'), requiredArtifact(state, 'tech'), requiredArtifact(state, 'uiux')];
-    case 'frontend':
-    case 'preview_confirm':
-    case 'backend':
-    case 'quality':
-      return [requiredArtifact(state, 'spec')];
-    case 'archive':
-      return [requiredArtifact(state, 'prd'), requiredArtifact(state, 'tech'), requiredArtifact(state, 'spec')];
-    case 'uiux':
-      return [requiredArtifact(state, 'prd'), requiredArtifact(state, 'tech')];
-    default:
-      return [];
-  }
 }
 
 function appError(code, message, details = {}) {
@@ -755,7 +1033,8 @@ async function main() {
     next: commandNext,
     advance: commandAdvance,
     gate: commandGate,
-    archive: commandArchive,
+    deliver: commandDeliver,
+    archive: commandDeliver,
     validate: commandValidate,
   };
 

@@ -19,8 +19,8 @@
 - 工作模式（`new` / `evolve` / `patch`）
 
 可选输入（如果存在）：
-- PRD 文档（`spec-dev/prd/{requirement_name}-prd.md`）
-- 技术方案文档（`spec-dev/tech/{requirement_name}-tech.md`）
+- PRD 文档（`output/{requirement_name}-prd.md`）
+- Architecture 文档（`output/{requirement_name}-architecture.md`）
 
 ## 审查范围
 
@@ -38,7 +38,7 @@
 | 级别 | 含义 | 处理方式 | 示例 |
 |------|------|---------|------|
 | **CRITICAL** | 可直接导致系统被入侵、数据泄露或服务中断的安全漏洞 | **BLOCK** — 必须修复后才能通过 quality 门禁 | 硬编码生产密钥、SQL 注入（用户输入拼接）、无鉴权的敏感操作端点、任意文件读取 |
-| **HIGH** | 存在明确安全风险但利用条件较苛刻，或存在合规风险 | **WARN** — 应修复，记录在报告中，不阻塞归档但强烈建议修复 | CSRF 保护缺失、日志泄露敏感数据、缺失输入校验、已知 CVE 漏洞依赖 |
+| **HIGH** | 存在明确安全风险但利用条件较苛刻，或存在合规风险 | **WARN** — 应修复，记录在报告中，不阻塞 delivery 但强烈建议修复 | CSRF 保护缺失、日志泄露敏感数据、缺失输入校验、已知 CVE 漏洞依赖 |
 | **MEDIUM** | 安全最佳实践偏差，可能被利用但影响有限 | **INFO** — 建议修复，记录在报告中供后续迭代处理 | 未设置安全响应头、错误消息包含内部信息（非生产环境）、弱加密算法（非敏感数据） |
 | **LOW** | 安全加固建议，当前无直接风险 | **NOTE** — 可选修复，记录在报告中但不强制 | 依赖版本可升级但无已知漏洞、注释中包含内部路径信息 |
 
@@ -629,7 +629,7 @@ fs\.createWriteStream
 
 2. 文件名未净化 → **HIGH**（可导致覆盖系统文件或写入 webshell）
 
-#### 7.3 归档/解压路径检测（Zip Slip）
+#### 7.3 压缩包/解压路径检测（Zip Slip）
 
 1. 搜索 ZIP/TAR 解压代码
 2. 检查是否验证了解压条目中的路径不包含 `../`
@@ -845,7 +845,7 @@ golang.org/x/time/rate
 
 ### 发现列表
 
-#### CRITICAL（阻塞归档，{N} 个）
+#### CRITICAL（阻塞 delivery，{N} 个）
 
 | # | 文件 | 行号 | 问题描述 | 修复建议 | OWASP 分类 |
 |---|------|------|---------|---------|-----------|
@@ -989,7 +989,7 @@ golang.org/x/time/rate
 - 发现任意 CRITICAL 问题时，`security_passed` 为 `false`
 - quality-reviewer 收到 `security_passed: false` 后，quality 门禁状态为 `FAILED`
 - 必须修复所有 CRITICAL 问题后**重新执行完整安全审查**（不是仅重新检查修复项）
-- 不允许绕过 CRITICAL 问题进入 archive
+- 不允许绕过 CRITICAL 问题进入 delivery
 
 ---
 
@@ -1029,6 +1029,6 @@ golang.org/x/time/rate
 
 ## 产出
 
-将安全审查结果以 Markdown 格式直接返回给 quality-reviewer，不单独写入文件。quality-reviewer 负责将你的发现整合到最终的 `spec-dev/quality/{requirement_name}-quality-report.md` 中。
+将安全审查结果以 Markdown 格式直接返回给 quality-reviewer，不单独写入文件。quality-reviewer 负责将你的发现整合到最终的 `output/{requirement_name}-quality-report.md` 中。
 
 如果你的审查发现 CRITICAL 问题，必须明确告知 quality-reviewer：`SECURITY_GATE_FAILED`，并列出所有 CRITICAL 问题的详细描述和修复建议。

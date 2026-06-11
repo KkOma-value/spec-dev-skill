@@ -1,36 +1,9 @@
-# 归档模板
+# Delivery 模板兼容入口
 
-# {需求名称} — 开发归档
+新流程使用 `references/delivery-template.md`，并通过以下命令生成交付报告：
 
-## 基本信息
+```bash
+node scripts/spec-dev.mjs deliver --root <project-root>
+```
 
-| 字段 | 值 |
-|------|-----|
-| 需求名称 | {需求名称} |
-| 归档日期 | {YYYY-MM-DD} |
-| 所属项目 | {项目名称} |
-| 开发周期 | {开始日期} ~ {归档日期} |
-
-## PRD 摘要
-
-{从 PRD 中提取 3-5 条核心功能点}
-
-## 技术方案摘要
-
-{从技术方案中提取核心设计决策}
-
-## 变更文件清单
-
-| 文件路径 | 变更类型 | 说明 |
-|---------|---------|------|
-| {文件路径} | 新增/修改/删除 | {简要说明} |
-
-## 关键决策记录
-
-{记录开发过程中的重要技术决策和取舍}
-
-## 相关文档
-
-- PRD: spec-dev/prd/{requirement_name}-prd.md
-- 技术方案: spec-dev/tech/{requirement_name}-tech.md
-- 任务清单: spec-dev/spec/{requirement_name}-tasks.md
+如果旧流程仍引用本文件，直接改读 `references/delivery-template.md`。

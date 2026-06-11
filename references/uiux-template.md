@@ -8,14 +8,43 @@
 |------|-----|
 | 需求名称 | {需求名称} |
 | 创建日期 | {YYYY-MM-DD} |
-| PRD 文档 | spec-dev/prd/{requirement_name}-prd.md |
-| 技术方案 | spec-dev/tech/{requirement_name}-tech.md |
+| PRD 文档 | output/{requirement_name}-prd.md |
+| Architecture 文档 | output/{requirement_name}-architecture.md |
 | 前端技术栈 | {框架名称及版本} |
 | 状态 | 草稿/已确认 |
 
 ---
 
 ## 1. 设计系统声明（Design System Declaration）
+
+### 1.0 UI Pro Max 推荐卡
+
+> 来源规则：本节根据 `references/uiux-pro-max-adapter.md` 生成。若已安装 `nextlevelbuilder/ui-ux-pro-max-skill` 并完成外部检索，Source Mode 填 `external-search`；否则填 `manual-adapter`，并按 adapter 的手工推理矩阵落地。
+
+| 字段 | 值 |
+|------|-----|
+| Query | `{product_type} {industry} {page_type} {tone} {data_density}` |
+| Source Mode | `{external-search / manual-adapter}` |
+| Product Match | `{匹配到的产品类型、行业、用户群}` |
+| Pattern | `{Data-Dense Dashboard / Trust & Authority / Conversion-Optimized / ...}` |
+| Style | `{Minimalism & Swiss / Soft UI Evolution / Accessible & Ethical / ...}` |
+| Colors | `Primary {hex}` / `Secondary {hex}` / `Accent {hex}` / `Background {hex}` / `Text {hex}` |
+| Typography | `Heading: {font}` / `Body: {font}` / `Mono: {font}` |
+| Key Effects | `{150-350ms 过渡、hover、focus、loading、reduced-motion 规则}` |
+| Anti-Patterns | `{针对该行业和页面类型必须避免的反模式}` |
+| Stack Notes | `{React / Vue / Next.js / shadcn/ui / html-tailwind 等实现注意点}` |
+
+#### 1.0.1 决策落地映射
+
+| 推荐卡字段 | 落地章节 | 落地方式 |
+|------------|----------|----------|
+| Pattern | 第 2、5、7 节 | 页面层级、用户流程、响应式布局 |
+| Style | 第 1、3、4 节 | 视觉密度、组件状态、页面布局 |
+| Colors | 第 1.5 节 | 扩展为完整颜色 token，不少于 15 色 |
+| Typography | 第 1.3、1.4 节 | 扩展为完整字体栈和排版层级 |
+| Key Effects | 第 1.9、3、4 节 | 动效 token、页面状态、组件状态 |
+| Anti-Patterns | 第 10 节 | 合并到反模式清单 |
+| Stack Notes | 第 1.2、4、9 节 | 组件库、组件清单、表单/数据展示实现规则 |
 
 ### 1.1 图标库
 
@@ -353,11 +382,11 @@ sequenceDiagram
 
 ## 6. API 契约对齐（API Contract Alignment）
 
-> 规则：此表中每一行的交互操作必须能从 Tech 文档中找到对应的接口定义。如果 Tech 文档中缺少某接口，须标注 `[API 缺口 — 需 Tech 补充]`。不允许凭空编造 Tech 文档中不存在的接口。
+> 规则：此表中每一行的交互操作必须能从 Architecture 文档中找到对应的接口定义。如果 Architecture 文档中缺少某接口，须标注 `[API 缺口 — 需 Architecture 补充]`。不允许凭空编造 Architecture 文档中不存在的接口。
 
 ### 6.1 接口对齐总表
 
-| 页面 | 用户交互 | HTTP 方法 | API 路径 | 请求体/参数 | 预期响应 | Tech 文档对应章节 |
+| 页面 | 用户交互 | HTTP 方法 | API 路径 | 请求体/参数 | 预期响应 | Architecture 文档对应章节 |
 |------|---------|----------|---------|------------|---------|-----------------|
 | {页面} | 点击「搜索」 | `GET` | `/api/{resource}` | `?keyword={s}&page={n}&size={n}` | `{ code, data: { list: T[], total: n } }` | {章节号} |
 | {页面} | 点击「新建」提交 | `POST` | `/api/{resource}` | `{ field1: T, field2: T }` | `{ code, data: T }` | {章节号} |
@@ -369,7 +398,7 @@ sequenceDiagram
 
 | 页面交互 | 缺口描述 | 建议补充的接口 | 状态 |
 |---------|---------|--------------|------|
-| {交互} | {所需但 Tech 未定义的接口} | `{Method} {Path}` | `[API 缺口 — 需 Tech 补充]` |
+| {交互} | {所需但 Architecture 未定义的接口} | `{Method} {Path}` | `[API 缺口 — 需 Architecture 补充]` |
 
 ### 6.3 前后端数据类型映射
 
@@ -519,8 +548,9 @@ sequenceDiagram
 | 12 | **模糊建议** | 「建议使用 X」「可以考虑 Y」 | 使用「选择 X，因为 Y」的明确句式 |
 | 13 | **Hero 区域放巨大渐变文字配 emoji** | AI 模板化 Landing Page 特征 | 不使用 Hero 区域，或使用具体的业务价值主张文案 |
 | 14 | **全页面居中布局无理由** | 无内容策略支撑的纯居中布局 | 根据内容策略选择布局：列表用左对齐、表单用居中或左对齐并给出理由 |
-| 15 | **接口凭空编造** | Tech 文档中不存在的 API | 所有接口必须能追溯到 Tech 文档，缺口标注 `[API 缺口 — 需 Tech 补充]` |
+| 15 | **接口凭空编造** | Architecture 文档中不存在的 API | 所有接口必须能追溯到 Architecture 文档，缺口标注 `[API 缺口 — 需 Architecture 补充]` |
 | 16 | **组件库未声明** | 未说明前端使用什么组件库实现 | 必须在 1.2 节声明组件库 |
+| 17 | **忽略 UI Pro Max 行业反模式** | 推荐卡中已标注的行业/页面反模式未落到本文档 | 将推荐卡 Anti-Patterns 逐项合并到本表或页面设计规则 |
 
 ---
 
@@ -529,6 +559,9 @@ sequenceDiagram
 提交本文档前，必须逐条确认以下项目全部通过。任一条不通过即视为文档不合格：
 
 ### 图标与视觉
+- [ ] UI Pro Max 推荐卡已填写完整，并标注 `external-search` 或 `manual-adapter`？
+- [ ] 推荐卡中的 Pattern / Style / Colors / Typography / Effects 已落到后续章节？
+- [ ] 推荐卡中的 Anti-Patterns 已合并到第 10 节？
 - [ ] 图标库已三选一并写明了库名、版本、安装命令？
 - [ ] 全文所有图标引用使用了该库的具体图标名（如 `Search`、`X`）？
 - [ ] 全文无任何 emoji 字符出现在 UI 元素描述中？
@@ -553,9 +586,9 @@ sequenceDiagram
 - [ ] 每个页面描述了在 3 个断点（mobile / tablet / desktop）下的布局变化？
 
 ### API 对齐
-- [ ] API 契约对齐表完整，每个页面交互都能追溯到 Tech 文档的具体接口？
-- [ ] 无 Tech 文档中不存在的接口被引用？
-- [ ] 接口缺口已标注 `[API 缺口 — 需 Tech 补充]`？
+- [ ] API 契约对齐表完整，每个页面交互都能追溯到 Architecture 文档的具体接口？
+- [ ] 无 Architecture 文档中不存在的接口被引用？
+- [ ] 接口缺口已标注 `[API 缺口 — 需 Architecture 补充]`？
 
 ### 表单与数据展示
 - [ ] 所有表单标注了必填/选填、校验规则、错误提示文案？
@@ -572,7 +605,7 @@ sequenceDiagram
 - [ ] 所有颜色都有 hex 值？
 - [ ] 所有间距都有 px 值？
 - [ ] 无「适量」「适当」「大概」「建议」「可以考虑」等模糊表述？
-- [ ] 所有 `[待确认]` 项都来自 PRD/Tech 文档的继承，非自行假设？
+- [ ] 所有 `[待确认]` 项都来自 PRD/Architecture 文档的继承，非自行假设？
 
 ---
 
@@ -583,4 +616,4 @@ sequenceDiagram
 3. **交互描述使用「当用户...时，系统应...」格式**。
 4. **视觉规范全部使用具体数值**（px、hex、ms），不允许模糊量词。
 5. **不确定的地方标注 `[待确认]`**，绝不凭空设计。
-6. **产出路径**: `spec-dev/uiux/{requirement_name}-uiux.md`
+6. **产出路径**: `output/{requirement_name}-uiux.md`
