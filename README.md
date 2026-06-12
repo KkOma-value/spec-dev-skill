@@ -1,6 +1,41 @@
+<div align="center">
+
+<sub>English · <a href="README.zh.md">简体中文</a></sub>
+
 # spec-dev
 
-`spec-dev` is a zero-dependency Codex / Claude Code skill for governed software delivery. It turns a natural-language requirement into research, three core documents, task planning, frontend-first implementation, backend work, quality checks, and a final delivery report.
+**Turn a natural-language requirement into research, specs, code, and a delivery report — through hard governance gates.**
+
+A zero-dependency skill for Codex and Claude Code that drives the whole delivery loop: research → three core docs → task planning → frontend-first implementation → backend → quality checks → delivery.
+
+<p>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/KkOma-value/spec-dev-skill?style=flat-square&color=blue" alt="License"></a>
+  <img src="https://img.shields.io/badge/version-4.0.0-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/node-%E2%89%A518-339933?style=flat-square&logo=node.js&logoColor=white" alt="Node >= 18">
+  <img src="https://img.shields.io/badge/dependencies-0-success?style=flat-square" alt="Zero dependencies">
+  <img src="https://img.shields.io/badge/runs%20on-Codex%20%C2%B7%20Claude%20Code-000000?style=flat-square" alt="Codex and Claude Code">
+</p>
+
+<p>
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#pipeline">Pipeline</a> ·
+  <a href="#work-modes">Work Modes</a> ·
+  <a href="#cli-reference">CLI</a> ·
+  <a href="SKILL.md">Skill Spec</a>
+</p>
+
+</div>
+
+---
+
+## Why spec-dev
+
+- **Zero dependencies.** One `.mjs` executor built on Node.js built-ins. No `npm install`, no lockfile, no supply chain.
+- **Governed, not freeform.** Four hard gates — docs, pre-code, preview, quality — stop the agent from skipping work or jumping straight to code.
+- **Frontend first.** UI is built and confirmed against the UI/UX doc before any backend code is written.
+- **Fully traceable.** Research, PRD, architecture, UI/UX, tasks, quality, and delivery are linked end to end.
+- **Resumable.** State lives in `.spec-dev/state.json`, so a run survives across sessions.
+- **Lean context.** Each phase returns only the files that phase needs to read.
 
 ## Pipeline
 
@@ -20,7 +55,40 @@ flowchart LR
   J --> K[done]
 ```
 
-`evolve` and `patch` modes start with `baseline`, then continue through the same governed flow.
+`evolve` and `patch` modes start with a `baseline` step, then continue through the same governed flow.
+
+## Quick Start
+
+```bash
+# Claude Code
+git clone https://github.com/KkOma-value/spec-dev-skill.git ~/.claude/skills/spec-dev
+
+# Codex
+git clone https://github.com/KkOma-value/spec-dev-skill.git ~/.codex/skills/spec-dev
+```
+
+Then, inside your agent, describe what you want:
+
+```text
+/spec-dev Add a paginated order-status query API
+```
+
+Requires Node.js 18+. No build step, no `npm install`.
+
+Trigger styles are interchangeable: `/spec-dev …`, `$spec-dev …`, `spec-dev: …`, `spec-dev：…`. Run it with no arguments to resume an unfinished flow from `.spec-dev/state.json`.
+
+```text
+/spec-dev Fix login redirect loop --mode patch
+/spec-dev Add export to CSV --mode evolve
+```
+
+## Work Modes
+
+| Mode | Starts at | Use case |
+|------|-----------|----------|
+| `new` | `research` | New feature or product work |
+| `evolve` | `baseline` | Incremental work on an existing project |
+| `patch` | `baseline` | Bug fixes and remediation |
 
 ## What It Produces
 
@@ -42,37 +110,21 @@ flowchart LR
 └── {YYYY-MM-DD}-{requirement_name}-delivery.md
 ```
 
-## Work Modes
+## Design Principles
 
-| Mode | Start | Use case |
-|------|-------|----------|
-| `new` | `research` | New feature or product work |
-| `evolve` | `baseline` | Incremental work on an existing project |
-| `patch` | `baseline` | Bug fixes and remediation work |
-
-## Install
-
-```bash
-# Codex
-git clone https://github.com/KkOma-value/spec-dev-skill.git ~/.codex/skills/spec-dev
-
-# Claude Code
-git clone https://github.com/KkOma-value/spec-dev-skill.git ~/.claude/skills/spec-dev
-```
-
-Requires Node.js 18+. No `npm install` is needed.
-
-## Use
-
-```text
-/spec-dev Add paginated order-status query API
-/spec-dev Fix login redirect loop --mode patch
-/spec-dev Add export to CSV --mode evolve
-```
-
-Plain text also works: `$spec-dev ...`, `spec-dev: ...`, `spec-dev：...`.
+| Principle | How it works |
+|-----------|--------------|
+| Zero dependencies | `scripts/spec-dev.mjs` uses only Node.js built-ins |
+| Small context | Each phase returns only the files needed for that phase |
+| Persistent state | `.spec-dev/state.json` supports recovery across sessions |
+| Hard gates | Docs, pre-code, preview, and quality gates prevent skipped work |
+| Frontend first | UI is completed and confirmed before backend implementation |
+| Traceability | Research → PRD → architecture → UI/UX → tasks → quality → delivery are linked |
 
 ## CLI Reference
+
+<details>
+<summary>Commands the skill runs under the hood</summary>
 
 ```bash
 node scripts/spec-dev.mjs init --root <dir> --requirement "<text>" [--mode new|evolve|patch]
@@ -86,7 +138,10 @@ node scripts/spec-dev.mjs validate --root <dir>
 
 Artifact kinds: `research`, `prd`, `architecture`, `uiux`, `proposal`, `tasks`, `quality`, `delivery`.
 
-## Example Session
+</details>
+
+<details>
+<summary>End-to-end example session</summary>
 
 ```bash
 node scripts/spec-dev.mjs init --root . --requirement "Add order status query"
@@ -102,16 +157,7 @@ node scripts/spec-dev.mjs advance --root . --completed quality --artifact qualit
 node scripts/spec-dev.mjs deliver --root .
 ```
 
-## Design Principles
-
-| Principle | Implementation |
-|-----------|----------------|
-| Zero dependencies | `scripts/spec-dev.mjs` uses only Node.js built-ins |
-| Small context | Each phase returns only the files needed for that phase |
-| Persistent state | `.spec-dev/state.json` supports recovery across sessions |
-| Hard gates | Docs, pre-code, preview, and quality gates prevent skipped work |
-| Frontend first | UI work is completed and confirmed before backend implementation |
-| Traceability | Research, PRD, architecture, UI/UX, tasks, quality, and delivery are linked |
+</details>
 
 ## Testing
 
