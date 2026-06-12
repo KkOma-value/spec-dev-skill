@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { access, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -388,6 +389,7 @@ function defaultQualityState() {
 
 function slugifyRequirement(requirement) {
   const tokens = [];
+  let droppedSignificant = false;
   for (const char of requirement.normalize('NFKD')) {
     if (/[\p{Letter}\p{Number}]/u.test(char) && char.charCodeAt(0) <= 127) {
       tokens.push(char.toLowerCase());
@@ -400,6 +402,11 @@ function slugifyRequirement(requirement) {
       continue;
     }
 
+    // A letter/number that is neither ASCII nor pinyin-mapped is lost from the
+    // slug (e.g. unmapped CJK). Separators/punctuation are expected and ignored.
+    if (/[\p{Letter}\p{Number}]/u.test(char)) {
+      droppedSignificant = true;
+    }
     tokens.push('-');
   }
 
@@ -409,12 +416,23 @@ function slugifyRequirement(requirement) {
     .replace(/^-+|-+$/g, '')
     .replace(/-{2,}/g, '-');
 
+  // When meaningful characters were dropped, distinct requirements can collapse
+  // to the same slug (worst case the bare "requirement" fallback) and silently
+  // overwrite each other's artifacts. Append a short content hash to keep them
+  // distinct. Slugs built entirely from mapped/ASCII content are left untouched.
+  if (droppedSignificant) {
+    const hash = createHash('sha256').update(requirement).digest('hex').slice(0, 8);
+    return slug ? `${slug}-${hash}` : `requirement-${hash}`;
+  }
+
   return slug || 'requirement';
 }
 
 async function readState(root) {
   try {
-    return normalizeState(JSON.parse(await readFile(statePath(root), 'utf8')));
+    const parsed = JSON.parse(await readFile(statePath(root), 'utf8'));
+    assertSchemaCompatible(parsed);
+    return normalizeState(parsed);
   } catch (error) {
     if (error.code !== 'ENOENT') {
       if (error instanceof SyntaxError) {
@@ -454,6 +472,16 @@ async function writeState(root, state) {
   await writeFile(statePath(root), `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
 }
 
+function assertSchemaCompatible(state) {
+  const version = Number(state?.schema_version);
+  if (Number.isFinite(version) && version > SCHEMA_VERSION) {
+    throw appError('STATE_SCHEMA_TOO_NEW', `State schema version ${version} is newer than supported version ${SCHEMA_VERSION}. Upgrade spec-dev.`, {
+      found: version,
+      supported: SCHEMA_VERSION,
+    });
+  }
+}
+
 function normalizeState(state) {
   const artifacts = { ...defaultArtifacts(), ...(state.artifacts || {}) };
   if (!artifacts.architecture && state.artifacts?.tech) {
@@ -469,7 +497,7 @@ function normalizeState(state) {
   const phase = normalizePhase(state.phase || 'research');
   const currentGate = normalizeGate(state.current_gate || (phase === 'docs_confirm' || phase === 'preview_confirm' ? phase : null));
 
-  return {
+  const normalized = {
     schema_version: SCHEMA_VERSION,
     mode: VALID_MODES.has(state.mode) ? state.mode : 'new',
     phase,
@@ -481,6 +509,16 @@ function normalizeState(state) {
     artifacts,
     quality: { ...defaultQualityState(), ...(state.quality || {}) },
   };
+
+  // Preserve migration audit trail so it survives the writeState round-trip.
+  if (state.migrated_from) {
+    normalized.migrated_from = state.migrated_from;
+  }
+  if (state.migrated_at) {
+    normalized.migrated_at = state.migrated_at;
+  }
+
+  return normalized;
 }
 
 function migrateLegacyState(state) {
@@ -633,6 +671,11 @@ async function commandAdvance(options) {
   if (completed === 'delivery') {
     throw appError('DELIVERY_REQUIRES_COMMAND', 'Use the deliver command to generate the delivery artifact.');
   }
+  if (completed === 'docs_confirm' || completed === 'preview_confirm') {
+    throw appError('USE_GATE_COMMAND', `Phase ${completed} is a hard gate; use "gate --confirm ${completed}" instead of advance.`, {
+      phase: completed,
+    });
+  }
 
   if (completed === 'pre_code') {
     await assertPreCodeChecklistComplete(root);
@@ -684,23 +727,9 @@ function artifactKindsForCompletedPhase(phase) {
 
 async function commandGate(options) {
   const root = normalizeRoot(options);
-  const confirm = String(options.confirm || '');
+  // `dev_confirm` is a legacy alias for the `preview_confirm` gate.
+  const confirm = normalizeGate(String(options.confirm || '')) || String(options.confirm || '');
   const state = await readState(root);
-
-  if (confirm === 'dev_confirm') {
-    if (state.phase !== 'preview_confirm') {
-      throw appError('GATE_MISMATCH', `Cannot confirm dev_confirm while current gate is ${state.current_gate || 'none'}.`, {
-        phase: state.phase,
-        current_gate: state.current_gate,
-        confirm,
-      });
-    }
-    addCompleted(state, 'preview_confirm');
-    state.phase = 'backend';
-    state.current_gate = null;
-    await writeState(root, state);
-    return phasePayload(root, state);
-  }
 
   if (confirm !== 'docs_confirm' && confirm !== 'preview_confirm') {
     throw appError('INVALID_GATE', `Unknown gate: ${confirm}. Valid gates: docs_confirm, preview_confirm.`, { confirm });
@@ -994,8 +1023,10 @@ async function countTasks(specFile) {
     }
   }
 
-  const taskLine = /^\[(?:x| )?\]\s+\d+\./i;
-  const doneLine = /^\[x\]\s+\d+\./i;
+  // Accept the bare `[] 1.` form plus conventional markdown list tasks
+  // (`- [ ] 1.`, `* [x] 1.`) and indented sub-tasks.
+  const taskLine = /^\s*(?:[-*]\s*)?\[(?:[ xX])?\]\s+\d+\./;
+  const doneLine = /^\s*(?:[-*]\s*)?\[[xX]\]\s+\d+\./;
   const lines = raw.split(/\r?\n/);
   return {
     total: lines.filter((line) => taskLine.test(line)).length,
@@ -1018,9 +1049,11 @@ function fail(error) {
   const code = error.code || 'UNEXPECTED_ERROR';
   ok({
     error: {
+      // Spread details first so a stray detail key (e.g. `code`/`message`)
+      // can never shadow the canonical fields below.
+      ...error.details,
       code,
       message: error.message,
-      ...error.details,
     },
   });
   process.exitCode = 1;

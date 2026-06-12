@@ -493,3 +493,145 @@ test('validate reports missing state, missing artifacts, and done state', async 
     assert.equal(result.json.mode, 'patch');
   });
 });
+
+test('advance cannot bypass the docs_confirm and preview_confirm hard gates', async () => {
+  await withTempProject(async (root) => {
+    await writeState(root, baseState({ phase: 'docs_confirm', current_gate: 'docs_confirm' }));
+    const bypass = runCli(['advance', '--root', root, '--completed', 'docs_confirm']);
+    assert.notEqual(bypass.status, 0);
+    assert.equal(bypass.json.error.code, 'USE_GATE_COMMAND');
+    assert.equal((await readState(root)).phase, 'docs_confirm');
+  });
+
+  await withTempProject(async (root) => {
+    await writeState(root, baseState({ phase: 'preview_confirm', current_gate: 'preview_confirm' }));
+    const bypass = runCli(['advance', '--root', root, '--completed', 'preview_confirm']);
+    assert.notEqual(bypass.status, 0);
+    assert.equal(bypass.json.error.code, 'USE_GATE_COMMAND');
+    assert.equal((await readState(root)).phase, 'preview_confirm');
+  });
+});
+
+test('distinct requirements with unmapped CJK get distinct, non-colliding slugs', async () => {
+  await withTempProject(async (rootA) => {
+    await withTempProject(async (rootB) => {
+      const a = runCli(['init', '--root', rootA, '--requirement', '图书馆藏书']);
+      const b = runCli(['init', '--root', rootB, '--requirement', '餐厅排队叫号']);
+      assert.equal(a.status, 0, a.stderr);
+      assert.equal(b.status, 0, b.stderr);
+      assert.notEqual(a.json.requirement_name, b.json.requirement_name);
+      // Neither may collapse to the bare fallback that overwrites artifacts.
+      assert.notEqual(a.json.requirement_name, 'requirement');
+      assert.notEqual(b.json.requirement_name, 'requirement');
+    });
+  });
+
+  await withTempProject(async (root) => {
+    // Fully mapped / ASCII slugs stay clean (no hash suffix).
+    const mapped = runCli(['init', '--root', root, '--requirement', 'Add status query API']);
+    assert.equal(mapped.json.requirement_name, 'add-status-query-api');
+  });
+});
+
+test('dev_confirm is a routed alias for the preview_confirm gate', async () => {
+  await withTempProject(async (root) => {
+    // Wrong phase: the alias must be rejected via the shared validation block,
+    // not silently confirmed. (normalizeState heals current_gate to the phase,
+    // so phase mismatch is the reachable failure path.)
+    await writeState(root, baseState({ phase: 'docs_confirm', current_gate: 'docs_confirm' }));
+    const wrongPhase = runCli(['gate', '--root', root, '--confirm', 'dev_confirm']);
+    assert.notEqual(wrongPhase.status, 0);
+    assert.equal(wrongPhase.json.error.code, 'GATE_MISMATCH');
+    assert.equal((await readState(root)).phase, 'docs_confirm');
+  });
+
+  await withTempProject(async (root) => {
+    await writeState(root, baseState({ phase: 'preview_confirm', current_gate: 'preview_confirm' }));
+    const confirmed = runCli(['gate', '--root', root, '--confirm', 'dev_confirm']);
+    assert.equal(confirmed.status, 0, confirmed.stderr);
+    assert.equal(confirmed.json.phase, 'backend');
+  });
+});
+
+test('deliver counts markdown list tasks, not only the bare bracket form', async () => {
+  await withTempProject(async (root) => {
+    const state = baseState({ phase: 'delivery' });
+    await writeState(root, state);
+    await mkdir(path.join(root, 'output'), { recursive: true });
+    await mkdir(path.join(root, '.spec-dev', 'changes', state.requirement_name), { recursive: true });
+    for (const key of ['research', 'prd', 'architecture', 'uiux', 'quality']) {
+      await writeFile(path.join(root, state.artifacts[key]), `# ${key}\n`);
+    }
+    await writeFile(path.join(root, state.artifacts.proposal), '# Proposal\n');
+    // Conventional markdown list task syntax that the old strict regex missed.
+    await writeFile(
+      path.join(root, state.artifacts.tasks),
+      '- [x] 1. Done frontend\n- [x] 2. Done backend\n  - [ ] 3. Pending subtask\n* [ ] 4. Pending\n',
+    );
+
+    const result = runCli(['deliver', '--root', root], {
+      env: { ...process.env, SPEC_DEV_DATE: '2026-05-25' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const delivery = await readFile(path.join(root, result.json.delivery_path), 'utf8');
+    assert.match(delivery, /Tasks completed: 2\/4/);
+  });
+});
+
+test('error detail keys cannot shadow the canonical code and message', async () => {
+  await withTempProject(async (root) => {
+    // INVALID_ARTIFACT_KIND attaches a detail `kind`; ensure code stays intact
+    // and detail flattening still works for consumers that read error.kind.
+    await writeState(root, baseState({ phase: 'research', artifacts: { ...baseState().artifacts, research: null } }));
+    const result = runCli([
+      'advance', '--root', root, '--completed', 'research',
+      '--artifact', 'bogus=output/x.md',
+    ]);
+    assert.notEqual(result.status, 0);
+    assert.equal(result.json.error.code, 'INVALID_ARTIFACT_KIND');
+    assert.equal(result.json.error.kind, 'bogus');
+  });
+});
+
+test('state.json with a newer schema_version is rejected', async () => {
+  await withTempProject(async (root) => {
+    await writeState(root, baseState({ schema_version: 99 }));
+    const result = runCli(['next', '--root', root]);
+    assert.notEqual(result.status, 0);
+    assert.equal(result.json.error.code, 'STATE_SCHEMA_TOO_NEW');
+    assert.equal(result.json.error.found, 99);
+  });
+});
+
+test('migration audit keys survive the state write round-trip', async () => {
+  await withTempProject(async (root) => {
+    await mkdir(path.join(root, 'spec-dev'), { recursive: true });
+    await writeFile(
+      path.join(root, 'spec-dev', '.state.json'),
+      `${JSON.stringify({
+        schema_version: 2,
+        mode: 'new',
+        phase: 'research',
+        requirement: 'Legacy feature',
+        requirement_name: 'legacy-feature',
+        created_at: '2026-05-25T00:00:00.000Z',
+        phases_completed: [],
+        current_gate: null,
+        artifacts: { research: 'output/legacy-feature-research.md' },
+        quality: {},
+      }, null, 2)}\n`,
+    );
+
+    const first = runCli(['next', '--root', root]);
+    assert.equal(first.status, 0, first.stderr);
+    const migrated = await readState(root);
+    assert.equal(migrated.migrated_from, path.join('spec-dev', '.state.json'));
+    assert.ok(migrated.migrated_at);
+
+    // A second read re-normalizes and re-writes; audit keys must not be stripped.
+    runCli(['next', '--root', root]);
+    const persisted = await readState(root);
+    assert.equal(persisted.migrated_from, path.join('spec-dev', '.state.json'));
+    assert.equal(persisted.migrated_at, migrated.migrated_at);
+  });
+});
