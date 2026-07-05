@@ -76,7 +76,38 @@
 - 涉及 2 个以上独立子系统
 - 任务标题里出现了「和」字（说明是两个任务）
 
-### Step 5：设置检查点
+### Step 5：波次划分（Wave Planning）
+
+每个切片必须声明 `files:` 清单。同一 wave 的切片文件互不重叠 — 这是并行安全的硬规则。
+
+#### 波次标记格式
+
+```markdown
+## Wave 1（可并行 — 无共享文件）
+[] 1. [FE][slice:用户列表页]   files: src/views/UserList.vue
+[] 2. [FE][slice:用户详情页]   files: src/views/UserDetail.vue
+[] 3. [BE][slice:用户表DDL]    files: db/migration/V1__user.sql
+
+## Wave 2（依赖 Wave 1 — DDL 就绪后）
+[] 4. [BE][slice:用户查询API]  files: mapper/UserMapper.java, service/UserService.java, controller/UserController.java
+
+## Wave 3（依赖 Wave 2 — API 就绪后）
+[] 5. [FE][slice:列表接真实API] files: src/api/user.ts, src/views/UserList.vue
+```
+
+#### 波次划分规则
+
+1. 共享文件的切片必须放在不同 wave。
+2. 依赖下层产物的切片放在后续 wave（如 API 切片依赖 DDL；FE 接真实 API 依赖 BE 接口就绪）。
+3. 单个切片涉及 >5 个文件或跨切片重构 → 标记 `[SERIAL]`，留在主会话串行执行。
+4. 单个 wave 内切片数 ≤ 4（并行 subagent 上限）。
+5. 前端可预览的切片整体排在靠前的 wave（保证 preview_confirm 时核心页面已可运行）。
+
+#### 文件冲突检测
+
+拆分完成后必须过一遍：同一 wave 内任意两个切片的 `files:` 交集为空。有交集 → 拆到不同 wave。
+
+### Step 6：设置检查点
 
 每 2-3 个任务后插入一个检查点，确保系统处于可工作状态：
 
@@ -172,6 +203,12 @@
 - [ ] 依赖顺序正确（底层先于上层）？
 - [ ] 高风险任务排在前面？
 - [ ] 修改指令足够具体，AI 不需要额外推理？
+- [ ] 每个切片有 `files:` 声明？
+- [ ] 同一 wave 内切片文件无交集？
+- [ ] 无 XL 切片（8+ 文件）？
+- [ ] 单切片不超过 5 个任务（超过则标记 `[SERIAL]`）？
+- [ ] api-contract 与 Architecture 文档接口一致？
+- [ ] tasks.md 头部含 Pre-Code Checklist？
 
 ## Proposal 产出
 
@@ -182,8 +219,35 @@
 - 关键范围边界
 - 实施顺序和确认门
 
+## API Contract 产出
+
+写入 `.spec-dev/changes/{requirement_name}/api-contract.md`。这是前后端接口的唯一事实源，前端 mock 和后端实现均以此为准则。内容结构：
+
+| 方法 | 路径 | 请求体 | 响应体 | 鉴权 | 说明 |
+|------|------|--------|--------|------|------|
+| GET | /api/orders?status={s} | — | `{ code, data: Order[] }` | @PreAuthorize | 按状态查询 |
+| POST | /api/orders | `{ productId, quantity }` | `{ code, data: Order }` | @PreAuthorize | 创建订单 |
+
+- Contract 中的接口必须从 Architecture 文档中可追溯。
+- 编码 subagent 的强制自查要求用 contract 逐接口验证路径、方法、请求/响应结构。
+
 ## Tasks 产出
 
 写入 `.spec-dev/changes/{requirement_name}/tasks.md`。
 
-完成后告知调度器：可调用 `advance --completed spec --artifact proposal=.spec-dev/changes/{requirement_name}/proposal.md --artifact tasks=.spec-dev/changes/{requirement_name}/tasks.md` 进入 pre_code 阶段。
+**tasks.md 头部必须内嵌 Pre-Code Checklist：**
+
+```markdown
+## Pre-Code Checklist
+
+- [ ] 已确认架构文档 API 路由/数据模型
+- [ ] 已确认 PRD 功能范围和边界
+- [ ] 已确认 UIUX 图标库、组件库、排版 token
+- [ ] 已读取依赖清单确认框架版本
+- [ ] 不确定的框架 API 已查阅官方文档
+- [ ] 确认实现顺序：FE wave 优先 → preview_confirm → BE wave 继续
+```
+
+调度器在 spec advance 前验证 checklist 全部已 `[x]`。
+
+完成后告知调度器：可调用 `advance --completed spec --artifact proposal=.spec-dev/changes/{requirement_name}/proposal.md --artifact tasks=.spec-dev/changes/{requirement_name}/tasks.md --artifact contract=.spec-dev/changes/{requirement_name}/api-contract.md` 进入 dev 阶段。
