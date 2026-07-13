@@ -65,8 +65,8 @@
 |------|--------|------|------|
 | XS | 1 | 单个函数或配置变更 | 加一个校验规则 |
 | S | 1-2 | 一个组件或接口 | 新增一个 API 端点 |
-| M | 3-5 | 一个功能切片 | 按状态查询订单（Mapper+Service+Controller） |
-| L | 5-8 | 多组件功能 | 带分页和筛选的搜索功能 |
+| M | 2-5 | 一个可验证功能切片 | 按状态查询订单（Mapper+Service+Controller） |
+| L | 6-8 | 多组件功能 | 带分页和筛选的搜索功能 |
 | XL | 8+ | **太大了，必须继续拆分** | — |
 
 如果一个任务是 L 或更大，必须拆成更小的任务。AI 在 S 和 M 大小的任务上表现最好。
@@ -76,13 +76,13 @@
 - 涉及 2 个以上独立子系统
 - 任务标题里出现了「和」字（说明是两个任务）
 
-### Step 5：设置检查点
+### Step 5：设置轻量检查点
 
-每 2-3 个任务后插入一个检查点，确保系统处于可工作状态：
+每个功能切片完成后插入轻量检查点，只跑该切片相关的定向测试或集成 smoke。完整 build 只允许在 frontend/backend 阶段末由 `verify` 执行：
 
 ```markdown
---- 检查点: 任务 1-3 完成后 ---
-- [ ] 编译通过
+--- 检查点: 订单状态查询切片完成后 ---
+- [ ] 定向测试通过: npm test -- order-status
 - [ ] 核心功能路径可用
 - [ ] 无控制台错误
 ```
@@ -90,7 +90,7 @@
 ## 执行规则
 
 1. 读取 `references/spec-template.md` 获取模板结构
-2. 任务拆分粒度：一个任务 = 一个文件的一组相关修改。如果一个功能点涉及多个文件，拆成多个任务
+2. 任务拆分粒度：一个任务 = 一个可独立验收的功能切片，通常覆盖 2-5 个紧密相关文件；不要为了逐文件跟踪拆散同一切片
 3. 任务按依赖图自底向上排列，同时尽量按功能纵向切片组织
 4. 每个任务必须包含足够详细的修改指令，让 AI 不需要额外推理就能执行
 5. 禁止出现「参考现有实现」「类似 xxx 方法」等模糊指令，必须写明具体代码
@@ -99,11 +99,12 @@
 ## 任务格式（强制）
 
 ```markdown
-[] {序号}. {任务标题}
-   - 文件: {完整的文件路径}
+[] {序号}. [{FE|BE|SHARED}] {任务标题}
+   - 文件: {完整文件路径，可重复多行，最多 5 个}
    - {具体修改指令第一条}
    - {具体修改指令第二条}
    - ...
+   - 定向验证: {只覆盖本切片的测试/lint/typecheck 命令，不得使用完整 build}
    - 验收: {具体的验收标准}
 ```
 
@@ -123,31 +124,26 @@
 ```markdown
 ### Phase 1: 订单状态查询功能
 
-[] 1. 新增 OrderStatusDTO status 字段
+[] 1. [BE] 实现订单状态查询数据与服务切片
    - 文件: src/main/java/com/xxx/dto/OrderStatusDTO.java
+   - 文件: src/main/java/com/xxx/mapper/OrderMapper.java
+   - 文件: src/main/resources/mapper/OrderMapper.xml
+   - 文件: src/main/java/com/xxx/service/OrderService.java
    - 在类中新增字段: private Integer status;
    - 添加注解: @NotNull(message = "状态不能为空")
    - 在类中新增字段: private String statusDesc;
    - 补充对应的 getter/setter 方法（如果项目使用 Lombok 则添加 @Data 注解即可）
-   - 验收: 编译通过，字段和注解正确
-
-[] 2. OrderMapper 新增按状态查询方法
-   - 文件: src/main/java/com/xxx/mapper/OrderMapper.java
    - 新增方法签名: List<OrderStatusDTO> selectByStatus(@Param("status") Integer status);
-   - 文件: src/main/resources/mapper/OrderMapper.xml
    - 新增 select 节点，id="selectByStatus"，resultType="com.xxx.dto.OrderStatusDTO"
    - SQL: SELECT id, order_no, status, status_desc FROM t_order WHERE status = #{status} AND is_deleted = 0 ORDER BY created_time DESC
-   - 验收: 编译通过，XML 中 SQL 语法正确
-
-[] 3. OrderService 新增查询逻辑
-   - 文件: src/main/java/com/xxx/service/OrderService.java
    - 注入 OrderMapper（如果尚未注入）
    - 新增方法: public List<OrderStatusDTO> queryByStatus(Integer status)
    - 方法体: 调用 orderMapper.selectByStatus(status)，如果结果为 null 返回 Collections.emptyList()
-   - 验收: 编译通过，方法返回值非 null
+   - 定向验证: mvn -Dtest=OrderServiceTest test
+   - 验收: 定向测试通过，字段/SQL/服务返回契约正确
 
 --- 检查点: Phase 1 完成 ---
-- [ ] mvn compile 通过
+- [ ] OrderServiceTest 通过
 - [ ] 按状态查询功能路径完整
 ```
 
@@ -159,6 +155,7 @@
 ## 红旗信号（出现以下情况说明拆分有问题）
 
 - 任务没有验收标准
+- 任务没有 `[FE]`、`[BE]`、`[SHARED]` 标签或定向验证命令
 - 任务大小是 XL（8+ 文件）
 - 任务之间没有检查点
 - 没有考虑依赖顺序
@@ -168,7 +165,9 @@
 
 - [ ] 每个任务都有验收标准？
 - [ ] 没有 XL 大小的任务？
-- [ ] 每 2-3 个任务有一个检查点？
+- [ ] 每个任务覆盖 2-5 个紧密相关文件，且是可验证功能切片？
+- [ ] 每个任务有 scope 标签和不含完整 build 的定向验证命令？
+- [ ] 每个切片检查点只做定向验证？
 - [ ] 依赖顺序正确（底层先于上层）？
 - [ ] 高风险任务排在前面？
 - [ ] 修改指令足够具体，AI 不需要额外推理？

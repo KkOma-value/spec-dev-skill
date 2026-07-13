@@ -10,7 +10,7 @@ A zero-dependency skill for Codex and Claude Code that drives the whole delivery
 
 <p>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/KkOma-value/spec-dev-skill?style=flat-square&color=blue" alt="License"></a>
-  <img src="https://img.shields.io/badge/version-4.0.0-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-4.1.0-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/node-%E2%89%A518-339933?style=flat-square&logo=node.js&logoColor=white" alt="Node >= 18">
   <img src="https://img.shields.io/badge/dependencies-0-success?style=flat-square" alt="Zero dependencies">
   <img src="https://img.shields.io/badge/runs%20on-Codex%20%C2%B7%20Claude%20Code-000000?style=flat-square" alt="Codex and Claude Code">
@@ -36,6 +36,7 @@ A zero-dependency skill for Codex and Claude Code that drives the whole delivery
 - **Fully traceable.** Research, PRD, architecture, UI/UX, tasks, quality, and delivery are linked end to end.
 - **Resumable.** State lives in `.spec-dev/state.json`, so a run survives across sessions.
 - **Lean context.** Each phase returns only the files that phase needs to read.
+- **Fast verification.** Tasks run targeted checks; each side runs full checks once per code fingerprint and quality reuses fresh evidence.
 
 ## Pipeline
 
@@ -97,6 +98,8 @@ Trigger styles are interchangeable: `/spec-dev …`, `$spec-dev …`, `spec-dev:
 ├── state.json
 ├── SESSION_BRIEF.md
 ├── PRE_CODE_CHECKLIST.md
+├── VALIDATION_PLAN.json
+├── verification.json
 └── changes/{requirement_name}/
     ├── proposal.md
     └── tasks.md
@@ -120,6 +123,7 @@ Trigger styles are interchangeable: `/spec-dev …`, `$spec-dev …`, `spec-dev:
 | Hard gates | Docs, pre-code, preview, and quality gates prevent skipped work |
 | Frontend first | UI is completed and confirmed before backend implementation |
 | Traceability | Research → PRD → architecture → UI/UX → tasks → quality → delivery are linked |
+| Deduplicated verification | Frontend/backend fingerprints keep build, test, and coverage to once per unchanged input state |
 
 ## CLI Reference
 
@@ -134,6 +138,8 @@ node scripts/spec-dev.mjs gate --root <dir> --confirm <docs_confirm|preview_conf
 node scripts/spec-dev.mjs deliver --root <dir>
 node scripts/spec-dev.mjs archive --root <dir>   # compatibility alias for deliver
 node scripts/spec-dev.mjs validate --root <dir>
+node scripts/spec-dev.mjs verify --root <dir> --scope <frontend|backend> --level full
+node scripts/spec-dev.mjs verify-status --root <dir> [--scope <frontend|backend>]
 ```
 
 Artifact kinds: `research`, `prd`, `architecture`, `uiux`, `proposal`, `tasks`, `quality`, `delivery`.
@@ -149,10 +155,14 @@ node scripts/spec-dev.mjs advance --root . --completed research --artifact resea
 node scripts/spec-dev.mjs advance --root . --completed docs --artifact prd=output/add-order-status-query-prd.md --artifact architecture=output/add-order-status-query-architecture.md --artifact uiux=output/add-order-status-query-uiux.md
 node scripts/spec-dev.mjs gate --root . --confirm docs_confirm
 node scripts/spec-dev.mjs advance --root . --completed spec --artifact proposal=.spec-dev/changes/add-order-status-query/proposal.md --artifact tasks=.spec-dev/changes/add-order-status-query/tasks.md
+# Write .spec-dev/VALIDATION_PLAN.json from references/validation-plan.md and complete PRE_CODE_CHECKLIST.md
 node scripts/spec-dev.mjs advance --root . --completed pre_code
+node scripts/spec-dev.mjs verify --root . --scope frontend --level full
 node scripts/spec-dev.mjs advance --root . --completed frontend
 node scripts/spec-dev.mjs gate --root . --confirm preview_confirm
+node scripts/spec-dev.mjs verify --root . --scope backend --level full
 node scripts/spec-dev.mjs advance --root . --completed backend
+node scripts/spec-dev.mjs verify-status --root .
 node scripts/spec-dev.mjs advance --root . --completed quality --artifact quality=output/add-order-status-query-quality-report.md
 node scripts/spec-dev.mjs deliver --root .
 ```

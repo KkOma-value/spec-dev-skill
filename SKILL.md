@@ -1,11 +1,6 @@
 ---
 name: spec-dev
-description: 轻量治理式需求开发全流程 Skill。通过零依赖 JS 执行器推进 research → docs → docs_confirm → spec → pre_code → frontend → preview_confirm → backend → quality → delivery。状态记录在 .spec-dev/，三文档和交付产物写入 output/，任务写入 .spec-dev/changes/。
-when-to-use: 当用户输入 /spec-dev、$spec-dev、spec-dev:、spec-dev：后跟需求描述时触发。也适用于用户要求走完整需求调研、三文档、任务拆分、前后端实现、质量门禁与交付流程时。
-allowed-tools: Read, Edit, Write, Bash, Agent, WebFetch, WebSearch
-user-invocable: true
-version: 4.0.0
-argument-hint: 需求描述
+description: 轻量治理式需求开发全流程 Skill。通过零依赖 JS 执行器推进 research → docs → docs_confirm → spec → pre_code → frontend → preview_confirm → backend → quality → delivery，并用代码指纹复用阶段末验证证据。用户输入 /spec-dev、$spec-dev、spec-dev:、spec-dev：后跟需求，或要求完整需求调研、三文档、任务拆分、前后端实现、质量门禁与交付流程时使用。
 ---
 
 # Spec-Dev — 轻量治理流程调度器
@@ -48,6 +43,8 @@ baseline → research → docs → docs_confirm → spec → pre_code → fronte
 ├── state.json
 ├── SESSION_BRIEF.md
 ├── PRE_CODE_CHECKLIST.md
+├── VALIDATION_PLAN.json
+├── verification.json
 └── changes/{requirement_name}/
     ├── proposal.md
     └── tasks.md
@@ -95,15 +92,18 @@ node scripts/spec-dev.mjs gate --root <projectRoot> --confirm <docs_confirm|prev
 node scripts/spec-dev.mjs deliver --root <projectRoot>
 node scripts/spec-dev.mjs archive --root <projectRoot>   # deliver 的兼容别名
 node scripts/spec-dev.mjs validate --root <projectRoot>
+node scripts/spec-dev.mjs verify --root <projectRoot> --scope <frontend|backend> --level full
+node scripts/spec-dev.mjs verify-status --root <projectRoot> [--scope <frontend|backend>]
 ```
 
 核心返回字段：
 
 ```json
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "phase": "docs",
   "mode": "new",
+  "verification_policy": "fast-v1",
   "current_gate": null,
   "required_reads": ["agents/prd-writer.md"],
   "expected_output": null,
@@ -174,13 +174,17 @@ delivery      → deliver
 ### pre_code
 
 - 读取并完成 `.spec-dev/PRE_CODE_CHECKLIST.md`。
+- 读取 `references/validation-plan.md`，生成 `.spec-dev/VALIDATION_PLAN.json`。
+- 每个任务标题必须标注 `[FE]`、`[BE]` 或 `[SHARED]`，并写明定向验证命令。
 - 未完成任意 `- [ ]` 项时，执行器会阻止进入 frontend。
+- 验证计划缺失、非法或与任务标签不一致时，执行器会阻止进入 frontend。
 
 ### frontend
 
 - 只执行 tasks 中标记为「前端」或 `[FE]` 的任务。
-- 每个任务完成后将 `[]` 改为 `[x]`，追加完成时间，并运行前端构建验证。
-- 全部前端任务完成后进入 `preview_confirm`。
+- 按 2-5 个文件的功能切片执行；每项完成后只运行对应的定向测试、局部 lint 或 typecheck，禁止逐任务完整构建。
+- 每项定向验证通过后将 `[]` 改为 `[x]`，追加完成时间。
+- 全部前端任务完成后只运行一次 `verify --scope frontend --level full`；证据为 `fresh` 后才能进入 `preview_confirm`。
 
 ### preview_confirm
 
@@ -195,12 +199,15 @@ delivery      → deliver
 ### backend
 
 - 只执行 tasks 中标记为「后端」或 `[BE]` 的任务。
-- 每个任务完成后将 `[]` 改为 `[x]`，追加完成时间，并运行后端构建验证。
+- 按功能切片执行；每项只跑定向验证，禁止逐任务完整构建。
+- 全部后端任务完成后只运行一次 `verify --scope backend --level full`；证据为 `fresh` 后才能进入 quality。
 
 ### quality
 
 - 读取 `agents/quality-reviewer.md`、`agents/security-reviewer.md`、`references/quality-checklist.md`。
-- 执行安全审查、代码审查、构建验证、覆盖率检查和 UI 一致性检查。
+- 先运行 `verify-status`；复用指纹一致的构建、测试、覆盖率证据，只重跑 `stale`、`failed`、`missing` 项。
+- 执行差量安全审查、代码审查和 UI 一致性检查；依赖清单或锁文件变化时才重跑依赖审计。
+- CRITICAL 和 HIGH 都阻断 delivery；报告必须包含 `status`、`critical`、`high` frontmatter。
 - 生成 `output/{requirement_name}-quality-report.md`。
 
 ### delivery

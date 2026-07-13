@@ -16,8 +16,7 @@
 
 ## 通过标准
 
-- **通过（PASS）**：零 CRITICAL，零 HIGH。MEDIUM 项已记录并获确认。
-- **有条件通过（CONDITIONAL_PASS）**：零 CRITICAL，零 HIGH。MEDIUM 项已记录，用户确认后可进入 delivery。
+- **通过（PASS）**：零 CRITICAL，零 HIGH。MEDIUM/LOW 项写入报告，不阻断 delivery。
 - **不通过（FAIL）**：存在任何 CRITICAL 或 HIGH 项。修复后重新检查。
 
 ---
@@ -164,7 +163,7 @@
 - [ ] `[CRIT]` 测试编译通过（Java: `mvn test-compile`）
 - [ ] `[HIGH]` 无编译警告（deprecated API 使用、unchecked cast 等）
 
-**检查方法**：执行完整构建命令，检查退出码和输出。
+**检查方法**：先读取 `verify-status`。对应 scope 为 `fresh` 时复用 `.spec-dev/verification.json` 中相同指纹、退出码为 0 的证据；仅对 `stale`、`failed`、`missing` scope 运行完整验证。
 
 ### 3.2 代码风格与静态分析
 
@@ -172,7 +171,7 @@
 - [ ] `[MED]` 代码格式化一致（遵循项目 .editorconfig 或格式化配置）
 - [ ] `[LOW]` Import 语句有序且无未使用的 import
 
-**检查方法**：运行项目配置的 lint 命令。
+**检查方法**：优先复用验证计划中相同指纹的 lint 证据；缺失时运行项目配置命令。
 
 ### 3.3 类型检查
 
@@ -180,7 +179,7 @@
 - [ ] `[MED]` Python 项目 mypy / pyright 通过（若项目配置了类型检查）
 - [ ] `[MED]` Java 泛型无不安全的 raw type 使用
 
-**检查方法**：运行项目对应的类型检查命令。
+**检查方法**：优先复用验证计划中相同指纹的 typecheck 证据；缺失时运行项目对应命令。
 
 ---
 
@@ -262,7 +261,7 @@
 - [ ] `[MED]` 边界条件和异常路径有覆盖
 - [ ] `[MED]` 测试之间独立（无执行顺序依赖，无共享可变状态）
 
-**检查方法**：运行 `mvn test` 并查看 JaCoCo 报告，检查测试类命名和结构。
+**检查方法**：复用新鲜 test/coverage 证据。coverage check 已声明同时满足 test 时禁止重复执行普通测试；再检查测试类命名和结构。
 
 ### 6.2 集成测试
 
@@ -327,13 +326,20 @@
 
 1. **读取产物文档**：读取 PRD、Architecture、Tasks 和 UIUX（如适用）文档
 2. **获取代码变更**：`git diff` 获取所有变更文件清单
-3. **逐节执行检查**：按上述 7 个章节的顺序执行检查
-4. **记录检查结果**：对每项标记 `[x]`（通过）/ `[ ]`（未通过）/ `N/A`（不适用）
-5. **输出检查报告**：汇总 CRITICAL / HIGH / MEDIUM / LOW 项，给出 PASS / CONDITIONAL_PASS / FAIL 结论
+3. **验证证据去重**：运行 `verify-status`，只重跑过期/失败/缺失 scope；coverage 可同时满足 test
+4. **逐节执行检查**：按上述 7 个章节的顺序执行检查
+5. **记录检查结果**：对每项标记 `[x]`（通过）/ `[ ]`（未通过）/ `N/A`（不适用）
+6. **输出检查报告**：汇总 CRITICAL / HIGH / MEDIUM / LOW；CRITICAL/HIGH 必须为零
 
 ## 检查报告模板
 
 ```markdown
+---
+status: PASSED
+critical: 0
+high: 0
+---
+
 # 质量门禁检查报告 — {需求名称}
 
 ## 基本信息
@@ -343,7 +349,7 @@
 | 检查日期 | {YYYY-MM-DD} |
 | 检查范围 | {变更文件数} 个文件 |
 | 需求名称 | {需求名称} |
-| 检查结论 | PASS / CONDITIONAL_PASS / FAIL |
+| 检查结论 | PASSED / FAILED |
 
 ## 逐节结果
 

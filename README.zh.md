@@ -10,7 +10,7 @@
 
 <p>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/KkOma-value/spec-dev-skill?style=flat-square&color=blue" alt="License"></a>
-  <img src="https://img.shields.io/badge/version-4.0.0-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-4.1.0-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/node-%E2%89%A518-339933?style=flat-square&logo=node.js&logoColor=white" alt="Node >= 18">
   <img src="https://img.shields.io/badge/%E4%BE%9D%E8%B5%96-0-success?style=flat-square" alt="零依赖">
   <img src="https://img.shields.io/badge/%E8%BF%90%E8%A1%8C%E4%BA%8E-Codex%20%C2%B7%20Claude%20Code-000000?style=flat-square" alt="Codex 与 Claude Code">
@@ -36,6 +36,7 @@
 - **全链路可追溯。** Research、PRD、Architecture、UI/UX、Tasks、Quality、Delivery 端到端关联。
 - **可恢复。** 状态保存在 `.spec-dev/state.json`，流程可跨会话续接。
 - **精简上下文。** 每个阶段只返回该阶段需要读取的文件。
+- **极速验证。** 任务级定向检查，阶段末全量验证；代码指纹未变化时 quality 直接复用证据。
 
 ## 流水线
 
@@ -97,6 +98,8 @@ git clone https://github.com/KkOma-value/spec-dev-skill.git ~/.codex/skills/spec
 ├── state.json
 ├── SESSION_BRIEF.md
 ├── PRE_CODE_CHECKLIST.md
+├── VALIDATION_PLAN.json
+├── verification.json
 └── changes/{requirement_name}/
     ├── proposal.md
     └── tasks.md
@@ -120,6 +123,7 @@ git clone https://github.com/KkOma-value/spec-dev-skill.git ~/.codex/skills/spec
 | 硬门禁 | 文档、编码前、预览和质量门禁阻止跳步 |
 | 前端优先 | 前端实现与预览确认后再进入后端 |
 | 可追溯 | Research → PRD → Architecture → UI/UX → Tasks → Quality → Delivery 全链路关联 |
+| 验证去重 | 前后端分别计算代码指纹，同一指纹的 build/test/coverage 只执行一次 |
 
 ## CLI 参考
 
@@ -134,6 +138,8 @@ node scripts/spec-dev.mjs gate --root <目录> --confirm <docs_confirm|preview_c
 node scripts/spec-dev.mjs deliver --root <目录>
 node scripts/spec-dev.mjs archive --root <目录>   # deliver 的兼容别名
 node scripts/spec-dev.mjs validate --root <目录>
+node scripts/spec-dev.mjs verify --root <目录> --scope <frontend|backend> --level full
+node scripts/spec-dev.mjs verify-status --root <目录> [--scope <frontend|backend>]
 ```
 
 Artifact 类型：`research`、`prd`、`architecture`、`uiux`、`proposal`、`tasks`、`quality`、`delivery`。
@@ -149,10 +155,14 @@ node scripts/spec-dev.mjs advance --root . --completed research --artifact resea
 node scripts/spec-dev.mjs advance --root . --completed docs --artifact prd=output/xin-zeng-ding-dan-zhuang-tai-cha-xun-prd.md --artifact architecture=output/xin-zeng-ding-dan-zhuang-tai-cha-xun-architecture.md --artifact uiux=output/xin-zeng-ding-dan-zhuang-tai-cha-xun-uiux.md
 node scripts/spec-dev.mjs gate --root . --confirm docs_confirm
 node scripts/spec-dev.mjs advance --root . --completed spec --artifact proposal=.spec-dev/changes/xin-zeng-ding-dan-zhuang-tai-cha-xun/proposal.md --artifact tasks=.spec-dev/changes/xin-zeng-ding-dan-zhuang-tai-cha-xun/tasks.md
+# 按 references/validation-plan.md 写入 .spec-dev/VALIDATION_PLAN.json，并完成 PRE_CODE_CHECKLIST.md
 node scripts/spec-dev.mjs advance --root . --completed pre_code
+node scripts/spec-dev.mjs verify --root . --scope frontend --level full
 node scripts/spec-dev.mjs advance --root . --completed frontend
 node scripts/spec-dev.mjs gate --root . --confirm preview_confirm
+node scripts/spec-dev.mjs verify --root . --scope backend --level full
 node scripts/spec-dev.mjs advance --root . --completed backend
+node scripts/spec-dev.mjs verify-status --root .
 node scripts/spec-dev.mjs advance --root . --completed quality --artifact quality=output/xin-zeng-ding-dan-zhuang-tai-cha-xun-quality-report.md
 node scripts/spec-dev.mjs deliver --root .
 ```

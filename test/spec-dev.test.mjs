@@ -83,7 +83,64 @@ function baseState(overrides = {}) {
       build_passed: false,
       coverage_passed: false,
     },
+    verification_policy: 'legacy',
     ...overrides,
+  };
+}
+
+function fastState(overrides = {}) {
+  return baseState({
+    schema_version: 4,
+    verification_policy: 'fast-v1',
+    ...overrides,
+  });
+}
+
+async function writeTaggedTasks(root, state, tags = ['FE']) {
+  await mkdir(path.dirname(path.join(root, state.artifacts.tasks)), { recursive: true });
+  const body = tags.map((tag, index) => `[] ${index + 1}. [${tag}] Task ${index + 1}\n   - 定向验证: targeted-${index + 1}\n`).join('');
+  await writeFile(path.join(root, state.artifacts.tasks), body);
+}
+
+async function writeValidationPlan(root, plan) {
+  await mkdir(path.join(root, '.spec-dev'), { recursive: true });
+  await writeFile(path.join(root, '.spec-dev', 'VALIDATION_PLAN.json'), `${JSON.stringify(plan, null, 2)}\n`);
+}
+
+function validationPlan({ frontend = null, backend = null, unknown = null } = {}) {
+  const notApplicable = { applicable: false, inputs: [], required_kinds: [], checks: [] };
+  const scopes = {
+    frontend: frontend || notApplicable,
+    backend: backend || notApplicable,
+  };
+  if (unknown) {
+    scopes[unknown] = notApplicable;
+  }
+  return { schema_version: 1, scopes };
+}
+
+function runnableScope(rootName, input = 'src.txt', options = {}) {
+  const buildCounter = `../output/${rootName}-build-count`;
+  const testCounter = `../output/${rootName}-test-count`;
+  return {
+    applicable: true,
+    inputs: [rootName, ...(options.sharedInputs || [])],
+    required_kinds: ['build', 'test', ...(options.requireCoverage ? ['coverage'] : [])],
+    checks: [
+      {
+        id: `${rootName}-build`,
+        kind: 'build',
+        cwd: rootName,
+        argv: [process.execPath, '-e', `const fs=require('fs');const p='${buildCounter}';const n=fs.existsSync(p)?Number(fs.readFileSync(p)):0;fs.writeFileSync(p,String(n+1));console.log('build-ok')`],
+      },
+      {
+        id: `${rootName}-coverage`,
+        kind: 'coverage',
+        satisfies: ['test', 'coverage'],
+        cwd: rootName,
+        argv: [process.execPath, '-e', `const fs=require('fs');const p='${testCounter}';const n=fs.existsSync(p)?Number(fs.readFileSync(p)):0;fs.writeFileSync(p,String(n+1));console.log('coverage-ok')`],
+      },
+    ],
   };
 }
 
@@ -113,10 +170,12 @@ test('init creates .spec-dev state and session brief for new mode', async () => 
     ]);
 
     const state = await readState(root);
-    assert.equal(state.schema_version, 3);
+    assert.equal(state.schema_version, 4);
+    assert.equal(state.verification_policy, 'fast-v1');
     assert.equal(state.phase, 'research');
     assert.equal(state.requirement_name, 'wei-ding-dan-fu-wu-xin-zeng-an-ding-dan-zhuang-tai-fen-ye-cha-xun-jie-kou');
     assert.equal(await exists(path.join(root, '.spec-dev', 'SESSION_BRIEF.md')), true);
+    assert.equal(await exists(path.join(root, '.spec-dev', 'verification.json')), true);
     assert.equal(await exists(path.join(root, 'spec-dev', '.state.json')), false);
   });
 });
@@ -197,6 +256,7 @@ test('next returns minimal reads and expected outputs for the governed phase cha
       phase: 'pre_code',
       reads: [
         '.spec-dev/PRE_CODE_CHECKLIST.md',
+        'references/validation-plan.md',
         'output/add-status-query-api-prd.md',
         'output/add-status-query-api-architecture.md',
         'output/add-status-query-api-uiux.md',
@@ -233,6 +293,7 @@ test('next returns minimal reads and expected outputs for the governed phase cha
         'agents/quality-reviewer.md',
         'agents/security-reviewer.md',
         'references/quality-checklist.md',
+        'references/security/generic.md',
         '.spec-dev/changes/add-status-query-api/tasks.md',
         'output/add-status-query-api-prd.md',
         'output/add-status-query-api-architecture.md',
@@ -462,7 +523,8 @@ test('legacy spec-dev/.state.json is read and migrated to .spec-dev/state.json',
     assert.equal(result.json.artifacts.architecture, 'spec-dev/tech/legacy-feature-tech.md');
 
     const migrated = await readState(root);
-    assert.equal(migrated.schema_version, 3);
+    assert.equal(migrated.schema_version, 4);
+    assert.equal(migrated.verification_policy, 'legacy');
     assert.equal(migrated.phase, 'docs');
     assert.equal(migrated.artifacts.architecture, 'spec-dev/tech/legacy-feature-tech.md');
     assert.equal(await exists(path.join(root, '.spec-dev', 'state.json')), true);
@@ -603,6 +665,23 @@ test('state.json with a newer schema_version is rejected', async () => {
   });
 });
 
+test('v3 workflows migrate to fast verification before the next development gate', async () => {
+  await withTempProject(async (root) => {
+    const state = baseState({ phase: 'frontend' });
+    delete state.verification_policy;
+    await writeState(root, state);
+
+    const next = runCli(['next', '--root', root]);
+    assert.equal(next.status, 0, next.stderr);
+    assert.equal(next.json.verification_policy, 'fast-v1');
+    assert.ok(next.json.required_reads.includes('.spec-dev/VALIDATION_PLAN.json'));
+
+    const blocked = runCli(['advance', '--root', root, '--completed', 'frontend']);
+    assert.notEqual(blocked.status, 0);
+    assert.equal(blocked.json.error.code, 'VALIDATION_PLAN_MISSING');
+  });
+});
+
 test('migration audit keys survive the state write round-trip', async () => {
   await withTempProject(async (root) => {
     await mkdir(path.join(root, 'spec-dev'), { recursive: true });
@@ -633,5 +712,253 @@ test('migration audit keys survive the state write round-trip', async () => {
     const persisted = await readState(root);
     assert.equal(persisted.migrated_from, path.join('spec-dev', '.state.json'));
     assert.equal(persisted.migrated_at, migrated.migrated_at);
+  });
+});
+
+test('fast pre_code requires a valid scoped validation plan', async () => {
+  await withTempProject(async (root) => {
+    const state = fastState({ phase: 'pre_code' });
+    await writeState(root, state);
+    await writeTaggedTasks(root, state, ['FE']);
+    await writeFile(path.join(root, '.spec-dev', 'PRE_CODE_CHECKLIST.md'), '- [x] Ready\n');
+
+    const missing = runCli(['advance', '--root', root, '--completed', 'pre_code']);
+    assert.notEqual(missing.status, 0);
+    assert.equal(missing.json.error.code, 'VALIDATION_PLAN_MISSING');
+
+    await writeValidationPlan(root, validationPlan({ frontend: runnableScope('frontend') }));
+    await writeFile(path.join(root, state.artifacts.tasks), '[] 1. [FE] Missing targeted check\n');
+    const noTargeted = runCli(['advance', '--root', root, '--completed', 'pre_code']);
+    assert.equal(noTargeted.json.error.code, 'TASK_TARGETED_VERIFICATION_MISSING');
+
+    await writeFile(path.join(root, state.artifacts.tasks), '[] 1. [FE] Broad check\n   - 定向验证: npm run build\n');
+    const broad = runCli(['advance', '--root', root, '--completed', 'pre_code']);
+    assert.equal(broad.json.error.code, 'TASK_TARGETED_VERIFICATION_TOO_BROAD');
+    await writeTaggedTasks(root, state, ['FE']);
+
+    await writeValidationPlan(root, validationPlan({ unknown: 'mobile' }));
+    const unknown = runCli(['advance', '--root', root, '--completed', 'pre_code']);
+    assert.equal(unknown.json.error.code, 'VALIDATION_PLAN_INVALID');
+    assert.deepEqual(unknown.json.error.unknown_scopes, ['mobile']);
+
+    const invalidPath = runnableScope('frontend');
+    invalidPath.inputs = ['../escape'];
+    await writeValidationPlan(root, validationPlan({ frontend: invalidPath }));
+    const escaped = runCli(['advance', '--root', root, '--completed', 'pre_code']);
+    assert.equal(escaped.json.error.code, 'VALIDATION_PLAN_INVALID');
+
+    const emptyCommand = runnableScope('frontend');
+    emptyCommand.checks[0].argv = [];
+    await writeValidationPlan(root, validationPlan({ frontend: emptyCommand }));
+    const empty = runCli(['advance', '--root', root, '--completed', 'pre_code']);
+    assert.equal(empty.json.error.code, 'VALIDATION_PLAN_INVALID');
+
+    await writeValidationPlan(root, validationPlan({ frontend: runnableScope('frontend') }));
+    const advanced = runCli(['advance', '--root', root, '--completed', 'pre_code']);
+    assert.equal(advanced.status, 0, advanced.stderr);
+    assert.equal(advanced.json.phase, 'frontend');
+  });
+});
+
+test('verify records scoped evidence, reuses fresh checks, and invalidates only changed inputs', async () => {
+  await withTempProject(async (root) => {
+    const state = fastState({ phase: 'frontend' });
+    await writeState(root, state);
+    await writeTaggedTasks(root, state, ['FE', 'BE']);
+    await mkdir(path.join(root, 'frontend'), { recursive: true });
+    await mkdir(path.join(root, 'backend'), { recursive: true });
+    await mkdir(path.join(root, 'output'), { recursive: true });
+    await writeFile(path.join(root, 'frontend', 'src.txt'), 'frontend-v1\n');
+    await writeFile(path.join(root, 'backend', 'src.txt'), 'backend-v1\n');
+    await writeFile(path.join(root, 'shared.config'), 'shared-v1\n');
+
+    const gitInit = spawnSync('git', ['init', '-q'], { cwd: root, encoding: 'utf8' });
+    assert.equal(gitInit.status, 0, gitInit.stderr);
+    spawnSync('git', ['add', 'frontend/src.txt', 'backend/src.txt', 'shared.config'], { cwd: root });
+    const commit = spawnSync('git', ['-c', 'user.name=Spec Dev', '-c', 'user.email=spec@example.test', 'commit', '-qm', 'fixture'], { cwd: root, encoding: 'utf8' });
+    assert.equal(commit.status, 0, commit.stderr);
+
+    const plan = validationPlan({
+      frontend: runnableScope('frontend', 'src.txt', { sharedInputs: ['shared.config'], requireCoverage: true }),
+      backend: runnableScope('backend', 'src.txt', { sharedInputs: ['shared.config'], requireCoverage: true }),
+    });
+    await writeValidationPlan(root, plan);
+
+    await writeState(root, fastState({ phase: 'backend' }));
+    const backendMissing = runCli(['advance', '--root', root, '--completed', 'backend']);
+    assert.notEqual(backendMissing.status, 0);
+    assert.equal(backendMissing.json.error.code, 'VERIFICATION_REQUIRED');
+    await writeState(root, state);
+
+    const firstFrontend = runCli(['verify', '--root', root, '--scope', 'frontend', '--level', 'full'], {
+      env: { ...process.env, SPEC_DEV_TEST_SECRET: 'do-not-persist-this-value' },
+    });
+    assert.equal(firstFrontend.status, 0, firstFrontend.stderr);
+    assert.equal(firstFrontend.json.status, 'fresh');
+    assert.equal(firstFrontend.json.executed_checks.length, 2);
+
+    const firstBackend = runCli(['verify', '--root', root, '--scope', 'backend', '--level', 'full']);
+    assert.equal(firstBackend.status, 0, firstBackend.stderr);
+    assert.equal(firstBackend.json.status, 'fresh');
+
+    await writeState(root, fastState({ phase: 'backend' }));
+    const backendAdvanced = runCli(['advance', '--root', root, '--completed', 'backend']);
+    assert.equal(backendAdvanced.status, 0, backendAdvanced.stderr);
+    assert.equal(backendAdvanced.json.phase, 'quality');
+
+    const reused = runCli(['verify', '--root', root, '--scope', 'frontend', '--level', 'full']);
+    assert.equal(reused.status, 0, reused.stderr);
+    assert.deepEqual(reused.json.executed_checks, []);
+    assert.equal(reused.json.reused_checks.length, 2);
+    assert.equal(await readFile(path.join(root, 'output', 'frontend-build-count'), 'utf8'), '1');
+    assert.equal(await readFile(path.join(root, 'output', 'frontend-test-count'), 'utf8'), '1');
+
+    await writeFile(path.join(root, 'output', 'note.txt'), 'workflow-only change\n');
+    const taskText = await readFile(path.join(root, state.artifacts.tasks), 'utf8');
+    await writeFile(path.join(root, state.artifacts.tasks), taskText.replace('[] 1.', '[x] 1.'));
+    const unchanged = runCli(['verify-status', '--root', root]);
+    assert.equal(unchanged.json.scopes.frontend.status, 'fresh');
+    assert.equal(unchanged.json.scopes.backend.status, 'fresh');
+
+    await writeFile(path.join(root, 'frontend', 'src.txt'), 'frontend-v2\n');
+    const frontendChanged = runCli(['verify-status', '--root', root]);
+    assert.equal(frontendChanged.json.scopes.frontend.status, 'stale');
+    assert.equal(frontendChanged.json.scopes.backend.status, 'fresh');
+
+    await writeFile(path.join(root, 'shared.config'), 'shared-v2\n');
+    const sharedChanged = runCli(['verify-status', '--root', root]);
+    assert.equal(sharedChanged.json.scopes.frontend.status, 'stale');
+    assert.equal(sharedChanged.json.scopes.backend.status, 'stale');
+
+    const ledger = await readFile(path.join(root, '.spec-dev', 'verification.json'), 'utf8');
+    assert.doesNotMatch(ledger, /do-not-persist-this-value/);
+    const parsed = JSON.parse(ledger);
+    assert.ok(parsed.entries.every((entry) => entry.output_sha256 && !('output' in entry)));
+  });
+});
+
+test('failed verification is recorded with its real exit code', async () => {
+  await withTempProject(async (root) => {
+    const state = fastState({ phase: 'frontend' });
+    await writeState(root, state);
+    await writeTaggedTasks(root, state, ['FE']);
+    await mkdir(path.join(root, 'frontend'), { recursive: true });
+    await writeFile(path.join(root, 'frontend', 'src.txt'), 'source\n');
+    const scope = runnableScope('frontend');
+    scope.checks[0].argv = [process.execPath, '-e', 'process.exit(7)'];
+    await writeValidationPlan(root, validationPlan({ frontend: scope }));
+
+    const failed = runCli(['verify', '--root', root, '--scope', 'frontend', '--level', 'full']);
+    assert.notEqual(failed.status, 0);
+    assert.equal(failed.json.error.code, 'VERIFICATION_FAILED');
+    assert.equal(failed.json.error.exit_code, 7);
+
+    const ledger = JSON.parse(await readFile(path.join(root, '.spec-dev', 'verification.json'), 'utf8'));
+    assert.equal(ledger.entries.at(-1).exit_code, 7);
+    const status = runCli(['verify-status', '--root', root, '--scope', 'frontend']);
+    assert.equal(status.json.scopes.frontend.status, 'failed');
+  });
+});
+
+test('root-scoped Git fingerprints exclude verification and output artifacts', async () => {
+  await withTempProject(async (root) => {
+    const state = fastState({ phase: 'frontend' });
+    await writeState(root, state);
+    await writeTaggedTasks(root, state, ['FE']);
+    await mkdir(path.join(root, 'frontend'), { recursive: true });
+    await mkdir(path.join(root, 'output'), { recursive: true });
+    await writeFile(path.join(root, 'frontend', 'src.txt'), 'source\n');
+    spawnSync('git', ['init', '-q'], { cwd: root });
+    spawnSync('git', ['add', 'frontend/src.txt'], { cwd: root });
+    const commit = spawnSync('git', ['-c', 'user.name=Spec Dev', '-c', 'user.email=spec@example.test', 'commit', '-qm', 'fixture'], { cwd: root, encoding: 'utf8' });
+    assert.equal(commit.status, 0, commit.stderr);
+
+    const scope = runnableScope('frontend');
+    scope.inputs = ['.'];
+    await writeValidationPlan(root, validationPlan({ frontend: scope }));
+    const first = runCli(['verify', '--root', root, '--scope', 'frontend', '--level', 'full']);
+    assert.equal(first.status, 0, first.stderr);
+    const second = runCli(['verify', '--root', root, '--scope', 'frontend', '--level', 'full']);
+    assert.equal(second.status, 0, second.stderr);
+    assert.deepEqual(second.json.executed_checks, []);
+    assert.equal(second.json.reused_checks.length, 2);
+  });
+});
+
+test('phase gates require fresh evidence and quality blocks CRITICAL or HIGH findings', async () => {
+  await withTempProject(async (root) => {
+    let state = fastState({ phase: 'frontend' });
+    await writeState(root, state);
+    await writeTaggedTasks(root, state, ['FE']);
+    await mkdir(path.join(root, 'frontend'), { recursive: true });
+    await mkdir(path.join(root, 'output'), { recursive: true });
+    await writeFile(path.join(root, 'frontend', 'src.txt'), 'source\n');
+    await writeValidationPlan(root, validationPlan({ frontend: runnableScope('frontend') }));
+
+    const blocked = runCli(['advance', '--root', root, '--completed', 'frontend']);
+    assert.notEqual(blocked.status, 0);
+    assert.equal(blocked.json.error.code, 'VERIFICATION_REQUIRED');
+
+    const verified = runCli(['verify', '--root', root, '--scope', 'frontend', '--level', 'full']);
+    assert.equal(verified.status, 0, verified.stderr);
+    const advanced = runCli(['advance', '--root', root, '--completed', 'frontend']);
+    assert.equal(advanced.status, 0, advanced.stderr);
+    assert.equal(advanced.json.phase, 'preview_confirm');
+
+    state = fastState({ phase: 'quality' });
+    await writeState(root, state);
+    const qualityPath = path.join(root, state.artifacts.quality);
+    await writeFile(qualityPath, '---\nstatus: PASSED\ncritical: 0\nhigh: 1\n---\n# Quality\n');
+    const high = runCli([
+      'advance', '--root', root, '--completed', 'quality',
+      '--artifact', `quality=${state.artifacts.quality}`,
+    ]);
+    assert.notEqual(high.status, 0);
+    assert.equal(high.json.error.code, 'QUALITY_GATE_FAILED');
+    assert.equal(high.json.error.high, 1);
+
+    await writeFile(qualityPath, '---\nstatus: PASSED\ncritical: 0\nhigh: 0\n---\n# Quality\n');
+    const passed = runCli([
+      'advance', '--root', root, '--completed', 'quality',
+      '--artifact', `quality=${state.artifacts.quality}`,
+    ]);
+    assert.equal(passed.status, 0, passed.stderr);
+    assert.equal(passed.json.phase, 'delivery');
+  });
+});
+
+test('scope without matching tasks is not applicable and cannot be enabled falsely', async () => {
+  await withTempProject(async (root) => {
+    const state = fastState({ phase: 'backend' });
+    await writeState(root, state);
+    await writeTaggedTasks(root, state, ['BE']);
+    await writeValidationPlan(root, validationPlan({ backend: runnableScope('backend') }));
+    const status = runCli(['verify-status', '--root', root, '--scope', 'frontend']);
+    assert.equal(status.status, 0, status.stderr);
+    assert.equal(status.json.scopes.frontend.status, 'not_applicable');
+
+    await writeValidationPlan(root, validationPlan({ frontend: runnableScope('frontend'), backend: runnableScope('backend') }));
+    const mismatch = runCli(['verify-status', '--root', root]);
+    assert.notEqual(mismatch.status, 0);
+    assert.equal(mismatch.json.error.code, 'VALIDATION_PLAN_SCOPE_MISMATCH');
+
+    const invalidScope = runCli(['verify-status', '--root', root, '--scope', 'mobile']);
+    assert.notEqual(invalidScope.status, 0);
+    assert.equal(invalidScope.json.error.code, 'INVALID_VERIFICATION_SCOPE');
+  });
+});
+
+test('quality loads only security references matching nested project manifests', async () => {
+  await withTempProject(async (root) => {
+    const state = baseState({ phase: 'quality' });
+    await writeState(root, state);
+    await mkdir(path.join(root, 'apps', 'web'), { recursive: true });
+    await writeFile(path.join(root, 'apps', 'web', 'package.json'), '{}\n');
+
+    const next = runCli(['next', '--root', root]);
+    assert.equal(next.status, 0, next.stderr);
+    assert.ok(next.json.required_reads.includes('references/security/generic.md'));
+    assert.ok(next.json.required_reads.includes('references/security/node.md'));
+    assert.ok(!next.json.required_reads.includes('references/security/python.md'));
   });
 });
